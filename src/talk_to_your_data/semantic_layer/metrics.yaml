@@ -1,0 +1,94 @@
+# Declarative layer: which metric is which aggregation over which model, and what
+# each dimension name means. Join/grain logic lives in models.py on purpose -- see
+# that file's docstring. Extend this file to add a metric or dimension; extend
+# models.py only if the underlying join/grain actually needs to change.
+
+dimensions:
+  - name: order_status
+    type: categorical
+    description: >-
+      Olist order lifecycle status: delivered, shipped, canceled, unavailable,
+      invoiced, processing, created, or approved.
+  - name: product_category
+    type: categorical
+    description: >-
+      Product category in English where a translation exists, otherwise the
+      original Portuguese name.
+  - name: payment_type
+    type: categorical
+    description: "How the order was paid: credit_card, boleto, voucher, debit_card, or not_defined."
+  - name: customer_state
+    type: categorical
+    description: Brazilian state (UF) of the customer.
+
+metrics:
+  - name: revenue
+    description: >-
+      Gross merchandise value (order_items.price) for delivered orders. Excludes
+      freight. Filter to a different order_status to see gross including
+      cancellations, etc.
+    model: order_items
+    agg: sum
+    measure: price
+    default_filters:
+      order_status: [delivered]
+
+  - name: freight_revenue
+    description: Total freight (shipping) charged on delivered orders.
+    model: order_items
+    agg: sum
+    measure: freight_value
+    default_filters:
+      order_status: [delivered]
+
+  - name: order_count
+    description: >-
+      Number of distinct orders, any status by default -- "how many orders were
+      placed," not "how many were fulfilled."
+    model: orders
+    agg: count_distinct
+    measure: order_id
+
+  - name: customer_count
+    description: >-
+      Number of distinct customers by customer_unique_id (the repeat-purchase
+      person), not customer_id (which is one-per-order and always unique).
+    model: orders
+    agg: count_distinct
+    measure: customer_unique_id
+
+  - name: avg_review_score
+    description: Average review score (1-5) across review records.
+    model: order_reviews
+    agg: avg
+    measure: review_score
+
+  - name: review_count
+    description: >-
+      Number of review records. review_id is not unique in the source data, so
+      this counts rows, not distinct reviews -- see CLAUDE.md.
+    model: order_reviews
+    agg: count
+    measure: "*"
+
+  - name: avg_delivery_days
+    description: >-
+      Average days from purchase to customer delivery, for orders that were
+      actually delivered (order_delivered_customer_date IS NOT NULL).
+    model: order_delivery
+    agg: avg
+    measure: delivery_days
+
+  - name: late_delivery_rate
+    description: >-
+      Share of delivered orders where the delivery date was after the estimated
+      delivery date (0.0-1.0).
+    model: order_delivery
+    agg: avg
+    measure: is_late
+
+  - name: avg_payment_installments
+    description: Average number of payment installments per payment record.
+    model: order_payments
+    agg: avg
+    measure: payment_installments
