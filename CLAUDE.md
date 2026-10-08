@@ -59,6 +59,9 @@ especially trade-offs that affect answer quality or evaluability.
 ├── src/talk_to_your_data/
 │   ├── db.py                     # app_engine() / readonly_engine() factories
 │   ├── checkpointer.py           # shared Postgres checkpointer (sync + async) for every graph
+│   ├── guardrails/                # cross-cutting, not nested under one agent (Phase 6a)
+│   │   ├── sql_guard.py           # sqlglot parse/validate, row-limit policy, output masking
+│   │   └── scope_guard.py        # out-of-scope classifier, gates ask_question() before the graph
 │   ├── semantic_layer/
 │   │   ├── models.py             # 5 models: joins, grain, dimensions (code, reviewed)
 │   │   ├── schema.py             # pydantic schema for metrics.yaml
@@ -147,6 +150,22 @@ especially trade-offs that affect answer quality or evaluability.
   `result_columns`/`result_rows`/`parent_finding_id` this way) — there's no
   migration framework in this project, and this project's tables are few and
   small enough that this hasn't needed to change.
+- **`sql_guard.validate_sql` walks the full AST for write/DDL nodes, not just the
+  top-level statement type** — Postgres allows data-modifying CTEs (`WITH x AS
+  (DELETE ... RETURNING *) SELECT ...`) whose *outermost* node parses as a
+  harmless `Select` (confirmed by actually parsing one, not assumed). A
+  type-only check would let this through. CTE aliases referenced in the final
+  `SELECT` also parse as `exp.Table` with no schema — excluded from the
+  "must be schema-qualified" check via the CTE's own alias set, or every
+  `WITH x AS (...) SELECT * FROM x` query would be falsely rejected.
+- **PII masking (Phase 6a) is name-based on OUTPUT columns and
+  known-bypassable** — `SELECT geolocation_lat AS x` or `SELECT
+  AVG(geolocation_lat)` both evade it, since neither produces a column named
+  `geolocation_lat`. Documented as a real limitation (see
+  `docs/architecture.md`'s failure-modes table and `test_sql_guard.py`'s
+  `test_KNOWN_LIMITATION_...` test), not hidden — closing it for real would
+  need column-provenance tracking through arbitrary SQL, or masked Postgres
+  views, both out of scope for this project.
 
 ## Data: Olist Brazilian e-commerce
 

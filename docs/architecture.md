@@ -1,9 +1,13 @@
 # Architecture
 
 System design for the full 6-phase target, not just what's built so far. Phases
-1-5 (foundation through PandasAI follow-ups) are built and tested; Phase 6
-(Slackbot, Langfuse tracing, guardrails, CI eval) is marked **planned** below —
-this doc exists so Phase 6 has a design to build against, not a blank page.
+1-5 (foundation through PandasAI follow-ups) and Phase 6a (guardrails) are built
+and tested; the rest of Phase 6 (Langfuse tracing, Slackbot, CI eval) is marked
+**planned** below — this doc exists so Phase 6 has a design to build against,
+not a blank page. The component diagram below hasn't been updated to show the
+guardrails layer explicitly yet since it sits inside `mcp-server`/`eda-api`
+rather than as a separate service — see the failure-modes table for what's
+actually built there.
 
 ## Component diagram
 
@@ -107,8 +111,11 @@ not a hypothetical list.
 | Cleaning-agent run left `awaiting_approval` forever | No TTL — the checkpoint just sits there | Not addressed; a real deployment needs either a TTL/cleanup job or to accept this as an acceptable operational characteristic for a low-volume internal tool |
 | Semantic layer has no date-range filter | Phase 4's `analysis_agent` works around this *only* for `time_series_trend` questions (extracts a start/end and filters in pandas) | A simple point-value question naming a specific date range (not a trend) has no equivalent workaround — `sql_agent` would need to fall back to `run_sql` itself, which is possible but not guaranteed |
 | PandasAI follow-up produces a chart | `chart_ref` is set to a **local filesystem path** (`exports/charts/...`) | Not reachable from Slack as-is; Phase 6 needs to either upload it somewhere fetchable or post the file directly via Slack's file-upload API |
-| No guardrails yet | None of PII masking, SQL allow-listing beyond the read-only DB role, row limits as *policy* (vs. the soft defaults already in `query_metric`/`run_sql`), or out-of-scope refusal exist | Entirely Phase 6 scope, by design — building it now against an unstated spec would mean redoing it |
-| No tracing yet | Nothing is instrumented with Langfuse | Phase 6 scope; every LLM call site in this codebase is already a narrow, named function (`propose_fixes`, `run_sql_agent`, `analyze`, `write_finding`, `_route`, `answer_followup`) specifically so wrapping them for tracing later is mechanical, not a refactor |
+| `run_sql` receives a data-modifying CTE | **Built (Phase 6a).** `sql_guard.validate_sql` walks the full AST, not just the top-level statement type (a data-modifying CTE's outer node parses as a harmless `Select`) — confirmed by parsing one, not assumed. Readonly DB role rejects it too (defense in depth), now redundantly. | None — covered, with tests proving both layers independently |
+| A query asks for more rows than it should get | **Built (Phase 6a).** Hard ceiling (`MAX_ROW_LIMIT=1000`), clamped regardless of what's requested | None |
+| Geolocation/zip columns leak via `run_sql` | **Built (Phase 6a), with a known, documented gap.** Masking matches OUTPUT column names — `SELECT geolocation_lat AS x` or `SELECT AVG(geolocation_lat)` both evade it entirely (no column provenance tracking through arbitrary SQL). `test_sql_guard.py` has a test *proving* the bypass exists, not just absence-of-bypass tests. | Would need column-provenance tracking or masked Postgres views to close properly — a real scope increase, deliberately not taken this phase |
+| Out-of-scope question (weather, general knowledge, injection attempts) | **Built (Phase 6a).** `scope_guard.check_scope` gates `ask_question()` before the supervisor graph starts — verified against real in-scope questions (not falsely refused), real out-of-scope questions (refused), and adversarial/injection-flavored prompts against the classifier itself (held, but not proof against all such attempts — an LLM classifier is manipulable in principle; the structural backstop is that `sql_agent` can only ever reach Postgres through read-only MCP tools regardless of what the classifier decides) | Phase 6d's golden set is where borderline/ambiguous cases get rigorously scored, not just smoke-tested |
+| No tracing yet | Nothing is instrumented with Langfuse | Phase 6b scope; every LLM call site in this codebase is already a narrow, named function (`propose_fixes`, `run_sql_agent`, `analyze`, `write_finding`, `_route`, `answer_followup`, `check_scope`) specifically so wrapping them for tracing later is mechanical, not a refactor |
 
 ## Latency and cost per question
 

@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 5 complete. Phase 6 not started.**
+**Current status: Phase 6a (Guardrails) complete. Phase 6b (Langfuse tracing) not started.**
 
 ---
 
@@ -420,15 +420,112 @@ container, computing the correct combined total for the top-3-category follow-up
 
 ## Phase 6 — Capstone
 
-- [ ] Slackbot (Bolt, Socket Mode): question in thread → answer + chart + SQL posted
-      in-thread
-- [ ] Guardrails: read-only DB role enforced at the connection level, SQL validation
-      (parse + allow-list, not just string matching), row limits, PII masking (check
-      which Olist fields count — e.g. geolocation lat/lng + customer city can be
-      quasi-identifying even without names), out-of-scope question refusal
-- [ ] Langfuse tracing wired through every agent/tool call
-- [ ] Eval suite: 40-question golden set; CI job that fails the PR if scores regress
-      below threshold
+Split into 4 sub-phases, each with its own plan → approve → build cycle like every
+phase so far — Phase 6 is four largely independent pieces, not one. Built in this
+order because 6d's refusal-correctness eval dimension needs 6a's refusal mechanism to
+exist first.
+
+**External setup required before each sub-phase can run for real** (not something I
+can do without you): a Slack app (Socket Mode enabled, bot token, app token, signing
+secret) for 6c; a Langfuse Cloud account (public/secret keys) for 6b; a GitHub repo +
+Actions secrets (`ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_MODEL`, plus
+long-lived legacy `KAGGLE_USERNAME`/`KAGGLE_KEY` — not the 3-hour `KAGGLE_API_TOKEN` —
+for loading data in CI) for 6d.
+
+### Phase 6a — Guardrails ✅
+
+- [x] Read-only DB role enforced at the connection level (already true since Phase 2 —
+      this sub-phase is about the layers *above* that connection)
+- [x] SQL validation: real parsing + allow-listing via `sqlglot` (already a transitive
+      dependency), not string matching — statement type, referenced tables/schemas,
+      no system catalog access
+- [x] Row limits enforced as policy (a hard cap), not just a default parameter value
+- [x] PII/quasi-identifier masking — concretely, for *this* dataset: `geolocation`
+      lat/lng (round to ~1 decimal) and zip-code-prefix columns (truncate), since
+      Olist has no names/emails to begin with
+- [x] Out-of-scope question refusal — a scope-check step before `sql_agent` ever runs,
+      so an unanswerable question never reaches the data layer at all
+
+#### Phase 6a summary
+
+**Built:** `guardrails/sql_guard.py` (sqlglot-based parsing: rejects anything that
+isn't exactly one `SELECT`/`WITH`/`UNION` statement, walks the **entire AST** for
+write/DDL nodes rather than just checking the top-level statement type, enforces a
+schema allow-list with CTE aliases correctly excluded from the qualification check,
+rejects disallowed functions, clamps row limits to a policy ceiling, and masks
+geolocation/zip columns by output name) wired into both `run_sql` and `query_metric`;
+`guardrails/scope_guard.py` (an LLM classifier gating `ask_question()` *before* the
+supervisor graph starts, so a refusal never touches `AgentState` at all — transparent
+to every adapter — REST, A2A, future Slack — without any of them needing to know a
+refusal path exists). 48 new tests, bringing the project total to 163 (88 unit /
+56 integration / 19 llm), covering real attack scenarios (a
+data-modifying CTE whose outer node is a harmless `Select`, comment-obscured
+statement smuggling, cross-schema access, case evasion) **and** positive controls
+(CTEs, joins, window functions, `UNION` — which parses to a different AST node type
+than `Select`/`With` and would have been falsely rejected by the original, narrower
+plan).
+
+**Verified, not just unit-tested:** every rejection/acceptance case parsed for real
+with `sqlglot` before being written into the plan (not assumed) — this is how the
+data-modifying-CTE gap and the `UNION`/CTE-alias false-positive risks were found,
+*before* writing the guardrail, not after a test failed; the full guardrail suite run
+against the real Dockerized `mcp-server` (a data-modifying CTE rejected, geolocation
+columns actually rounded in the response); the masking bypass not just left
+untested but *asserted to exist* (`test_KNOWN_LIMITATION_...`); the refusal path
+proven to short-circuit before ever needing the MCP server running at all, and 10
+real-model scenarios (4 in-scope, 4 out-of-scope, 2 adversarial) via
+`test_scope_guard_live.py`.
+
+**Key decisions, trade-offs, and gaps found while planning (before they became
+bugs):**
+- *AST-walk for write nodes, not a statement-type check* — found by actually parsing
+  `WITH x AS (DELETE FROM raw.orders RETURNING *) SELECT count(*) FROM x` and seeing
+  its top-level type is `Select`. A plan built only from the SQL-injection-cheatsheet
+  style of scenario (plain `DELETE`, stacked statements) would have missed this
+  entirely.
+- *CTE aliases excluded from schema-qualification checks* — found by parsing a
+  completely benign `WITH recent AS (...) SELECT * FROM recent` and seeing the CTE
+  reference show up in `find_all(exp.Table)` with no schema, which the naive rule
+  would have falsely rejected. Positive-control testing caught what negative-only
+  testing couldn't.
+- *Masking is best-effort and documented as bypassable*, not built as a false sense
+  of completeness — a real fix (column-provenance tracking, or masked Postgres
+  views) is a genuine scope increase, decided against for this project explicitly
+  rather than silently deferred.
+- *Refusal gates `ask_question()`, not the supervisor graph* — keeps the graph's job
+  purely "answer an in-scope question," keeps the guardrail independently testable
+  (proven by a test that succeeds with the MCP server deliberately not running), and
+  means every current and future adapter (REST, A2A, Slack) gets refusal for free.
+- *`check_scope` raises on a malformed model response, matching every other
+  tool-use call site in this project* (`propose_fixes`, `classify_lens`,
+  `write_finding`, `_route`) rather than failing open or closed silently — a
+  deliberate reversal from an earlier draft of this function that considered
+  failing open, for consistency with the rest of the codebase's error-handling
+  philosophy.
+
+---
+
+- [ ] Every LLM call site wrapped for tracing (`propose_fixes`, `run_sql_agent`,
+      `classify_lens`/`analyze`, `write_finding`, `_route`, `answer_followup`) —
+      each is already a narrow, named function specifically so this is mechanical
+
+### Phase 6c — Slackbot
+
+- [ ] Slack Bolt app (Socket Mode): question in thread → answer + chart + SQL posted
+      in-thread, as a thin adapter over `ask_question()`/`answer_followup()` (same
+      pattern as the REST and A2A adapters)
+
+### Phase 6d — Eval suite + CI
+
+- [ ] 40-question golden set, each with an independently-computed expected value
+- [ ] Scoring functions in code for all three dimensions (not eyeballed):
+  - **Execution accuracy** — expected value vs. the pipeline's answer, within tolerance
+  - **Faithfulness** — every number in the narrative traceable to the finding's stored
+    `result_rows` (Phase 5's JSONB columns make this directly queryable)
+  - **Refusal correctness** — out-of-scope questions in the set correctly hit 6a's
+    refusal path
+- [ ] CI job (GitHub Actions) that runs lint/type-check/unit/integration always, and
+      the eval suite on PRs, failing the PR if any dimension regresses below threshold
 
 **Evaluation note — this is the full rubric, each dimension needs a scoring function
 in code, not eyeballing:**

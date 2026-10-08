@@ -9,26 +9,24 @@ long-running processes that need to reach this one over the network.
 """
 
 import os
-import re
 from typing import Any
 
 from fastmcp import FastMCP
 from sqlalchemy import text
 
 from talk_to_your_data.db import readonly_engine
+from talk_to_your_data.guardrails import sql_guard
 from talk_to_your_data.semantic_layer.compiler import ALLOWED_GRAINS, compile_metric
 from talk_to_your_data.semantic_layer.registry import DIMENSIONS, METRICS, MODELS_REGISTRY
 
 mcp = FastMCP(name="talk-to-your-data")
-
-_SELECT_OR_WITH = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
 
 
 def _run(stmt: Any, params: dict[str, Any] | None = None) -> dict[str, Any]:
     with readonly_engine().connect() as conn:
         result = conn.execute(stmt, params or {})
         columns = list(result.keys())
-        rows = [dict(row._mapping) for row in result]
+        rows = [sql_guard.mask_row(dict(row._mapping)) for row in result]
     return {"columns": columns, "rows": rows, "row_count": len(rows)}
 
 
@@ -77,8 +75,9 @@ def query_metric(
 
     Returns the SQL used alongside the result.
     """
+    effective_limit = sql_guard.clamp_limit(limit)
     stmt, sql_text = compile_metric(
-        metric, dimensions=dimensions, filters=filters, time_grain=time_grain, limit=limit
+        metric, dimensions=dimensions, filters=filters, time_grain=time_grain, limit=effective_limit
     )
     return {"sql": sql_text, **_run(stmt)}
 
@@ -87,19 +86,17 @@ def query_metric(
 def run_sql(query: str, limit: int = 100) -> dict[str, Any]:
     """Run a read-only, single-statement SQL query against the raw schema.
 
-    Only SELECT/WITH is allowed and results are capped at `limit` rows. This is
-    deliberately minimal -- no parsing/allow-listing beyond that -- the full
-    guardrail suite (row limits as policy, PII masking, out-of-scope refusal) is
-    Phase 6 scope. Prefer query_metric when a metric already covers the question.
+    Validated by parsing (not string matching): must be exactly one SELECT/
+    WITH/UNION statement, no write/DDL nodes anywhere in the tree (including
+    inside a data-modifying CTE), only the `raw` schema. Prefer query_metric
+    when a metric already covers the question.
     """
+    sql_guard.validate_sql(query)
+    effective_limit = sql_guard.clamp_limit(limit)
     stripped = query.strip().rstrip(";")
-    if ";" in stripped:
-        raise ValueError("Only a single SQL statement is allowed.")
-    if not _SELECT_OR_WITH.match(stripped):
-        raise ValueError("Only SELECT/WITH statements are allowed.")
     wrapped = text(f"SELECT * FROM ({stripped}) AS run_sql_subquery LIMIT :limit")
-    result = _run(wrapped, {"limit": limit})
-    return {"sql": f"{stripped} -- wrapped with LIMIT {limit}", **result}
+    result = _run(wrapped, {"limit": effective_limit})
+    return {"sql": f"{stripped} -- wrapped with LIMIT {effective_limit}", **result}
 
 
 if __name__ == "__main__":
