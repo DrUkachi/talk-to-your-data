@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 2 complete. Phase 3 not started.**
+**Current status: Phase 3 complete. Phase 4 not started.**
 
 ---
 
@@ -154,22 +154,100 @@ in-process test client) and called `query_metric` over a real socket.
 
 ---
 
-## Phase 3 — LangGraph data-cleaning agent
+## Phase 3 — LangGraph data-cleaning agent ✅
 
-- [ ] Graph: profile → propose fixes → human approval (interrupt) → apply → validate →
+- [x] Graph: profile → propose fixes → human approval (interrupt) → apply → validate →
       loop on failure, using a Postgres checkpointer
   - **Acceptance:** graph compiles with the checkpointer; an approval interrupt
     actually pauses execution and resumes correctly after approval; a deliberately
     broken dataset triggers at least one fix→apply→validate loop.
-- [ ] FastAPI service wrapping the graph, Dockerized
+- [x] FastAPI service wrapping the graph, Dockerized
   - **Acceptance:** `docker compose up` brings up API + Postgres; POST starts a run and
     returns a run id; GET returns current state / pending approval for that run.
-- [ ] Unit tests per node (profile/propose/apply/validate), not just end-to-end
+- [x] Unit tests per node (profile/propose/apply/validate), not just end-to-end
 
 **Evaluation note:** quality here means "fixed real problems without touching values it
 shouldn't have." Plan: a small set of synthetic data-quality injections (nulls, dupes,
 bad types) with known-correct fixes, re-run as a regression set whenever the
 fix-proposal prompt changes.
+
+### Phase 3 summary
+
+**Built:** a 5-node graph (`profile → propose_fixes → [interrupt] → apply → validate`,
+looping to `profile` on failed validation, capped at `max_attempts=3`) over a
+`CleaningState`; a `TABLE_CHECKS` registry of 4 deterministic check types (logical
+ordering, out-of-range, exact duplicates, categorical noise) covering `orders`,
+`products`, `order_reviews`, `order_items`; 5 fix strategies
+(`trim_whitespace`/`normalize_case`/`drop_exact_duplicates`/`null_out_impossible_value`/
+`clip_outlier`) rendered deterministically from an LLM-chosen strategy + params,
+applied transactionally (all-or-nothing); a `clean` schema materialized once from
+`raw` per table (second runs build on prior fixes, don't reset); a `langgraph` schema
+holding `PostgresSaver`'s checkpoint tables; a FastAPI service
+(`POST /cleaning-runs`, `GET /cleaning-runs/{id}`, `POST .../approve`) built and run
+via `docker compose`. 75 tests total (32 unit / 43 integration) — unit tests include
+pure SQL-render assertions for all 5 strategies and the tool-use parsing with a
+stubbed Anthropic client (no real credentials needed); integration tests include a
+synthetic dirty fixture exercising all 4 check types end-to-end through interrupt →
+partial-approval → loop → full-approval → done.
+
+**Verified, not just unit-tested:** profiled all 4 real `raw.*` tables and confirmed
+they're genuinely clean by these checks (zero findings) — an honest outcome given the
+scoping decision below, not a gap; killed and recreated the graph object mid-run
+(simulating a process restart) and confirmed it resumed correctly from Postgres, not
+from in-memory state; built and ran the actual Docker image via
+`docker compose up -d --build`, hit it with real `curl` requests over the network, and
+confirmed the least-privilege-adjacent `clean`/`langgraph` schemas got created
+correctly from inside the container (which talks to Postgres via the compose network
+hostname, not `localhost`).
+
+**Key decisions and trade-offs:**
+- *Scoping "defect" narrower than "quirk"*: most of Phase 1/2's documented Olist
+  quirks (non-unique `review_id`, null delivery dates, 8 order statuses) are
+  legitimate business facts the semantic layer already handles correctly — "fixing"
+  them would be wrong. This agent targets a different, narrower thing: illogical
+  orderings, out-of-range values, exact duplicates, categorical noise. Confirmed by
+  actually profiling real data: zero findings across all 4 tables. The synthetic
+  dirty fixture (not real data) is what makes the agent's logic testable at all.
+- *LLM picks strategy + params referencing a `finding_id`, never raw SQL or a
+  column name*: `apply` resolves the actual table/column from the matching
+  `ProfileFinding`, not from LLM free text, so there's no path for the LLM to point
+  a write at an arbitrary identifier. Same throughline as Phase 2's compiler.
+- *Cleaning agent uses `app_engine()` directly, not the MCP server*: the "agents only
+  touch Postgres through MCP" rule (CLAUDE.md) is about the Q&A path's guardrails
+  against natural-language input. This agent needs write access and never processes
+  user-facing natural language — extending MCP with write tools to unify the two
+  would weaken the boundary Phase 6 depends on. Documented explicitly in CLAUDE.md
+  so it doesn't look like a one-off inconsistency later.
+- *A fresh graph + checkpointer connection per request, not a long-lived one*:
+  proved by the restart test. This also meant discovering mid-build that
+  `PostgresSaver` has no schema parameter — fixed via `?options=-c search_path=...`
+  on the connection string, confirmed with a throwaway script before wiring it in.
+- *`model_dump(mode="json")`, not the default*: the default pydantic dump kept
+  `FixStrategy` as a live Python enum object inside state, which LangGraph's
+  checkpointer warned about serializing via msgpack. Caught by actually running an
+  end-to-end flow and reading the warning, not by inspection.
+- *Docker image excludes dev tools*: `uv sync` installs the `dev` dependency group by
+  default (confirmed by checking `uv sync --help`, not assumed) — fixed with
+  `--no-default-groups` in the Dockerfile so pytest/ruff/mypy don't ship in the
+  runtime image.
+
+**Post-completion fix (once real Foundry credentials were configured):** forced
+`tool_choice` (`{"type": "tool", ...}`) returns a 400 on the `aie-academy-hub`
+deployment for both `claude-opus-5-5` and `claude-sonnet-5` ("not supported for this
+model") — this had never been exercised against the real API before, since all
+Phase 3 tests used a stubbed client. Fixed in `llm.py`: dropped `tool_choice`
+entirely (defaults to `"auto"`), added an explicit "you must call the tool" prompt
+instruction, and `propose_fixes` now raises a clear error if no `tool_use` block
+comes back instead of silently returning nothing. Re-verified the entire interrupt
+→ approve → apply → validate flow against the real model, through the actual Docker
+container (not just in-process): injected a genuine ordering violation into
+`clean.orders`, confirmed the real model proposed a well-reasoned
+`null_out_impossible_value` fix, approved it via `POST .../approve`, and confirmed
+validation passed. Added `tests/test_llm_propose_fixes_live.py` (marked `llm`,
+skipped by default, `ANTHROPIC_API_KEY`-gated) as the permanent version of this
+check — assertions are intentionally soft on *which* findings get a proposal (the
+model skipping a fix it judges unsafe, e.g. a negative `amount` that might be a
+legitimate refund, is a reasonable call, not a test failure).
 
 ---
 

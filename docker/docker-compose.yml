@@ -15,5 +15,20 @@ services:
       timeout: 5s
       retries: 10
 
+  cleaning-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file: ../.env
+    environment:
+      # Inside the compose network Postgres is reachable at the service name,
+      # not localhost -- .env's POSTGRES_HOST is for host-machine access.
+      POSTGRES_HOST: postgres
+    ports:
+      - "${CLEANING_API_PORT}:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:

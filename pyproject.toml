@@ -44,8 +44,11 @@ select = ["E", "F", "I", "UP", "B"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["scripts"]
-markers = ["integration: requires Docker Postgres running with data loaded (scripts/load_data.py)"]
-addopts = "-m 'not integration'"
+markers = [
+    "integration: requires Docker Postgres running with data loaded (scripts/load_data.py)",
+    "llm: calls the real Anthropic/Foundry API (needs ANTHROPIC_API_KEY in .env)",
+]
+addopts = "-m 'not integration and not llm'"
 
 [tool.mypy]
 python_version = "3.11"

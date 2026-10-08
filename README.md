@@ -31,4 +31,16 @@ uv run pytest -m integration    # requires the steps above to have run
 
 # MCP server (semantic layer + read-only SQL tool), served over HTTP
 uv run python -m talk_to_your_data.mcp_server.server
+
+# Cleaning agent API (`docker compose up -d` above already started this too)
+curl -X POST localhost:8001/cleaning-runs -H 'content-type: application/json' \
+  -d '{"table": "orders"}'
+# -> {"run_id": "...", "status": "awaiting_approval" | "done", "proposals": [...], ...}
+# If awaiting_approval, review `proposals` then:
+curl -X POST localhost:8001/cleaning-runs/<run_id>/approve -H 'content-type: application/json' \
+  -d '{"approved_finding_ids": ["..."]}'
 ```
+
+Proposing fixes calls the LLM (`ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` in `.env`) -- without
+real credentials, runs against tables with no findings still work end-to-end (they finish
+immediately with `status: done`), but a run with findings will fail at the propose step.

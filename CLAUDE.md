@@ -47,7 +47,8 @@ especially trade-offs that affect answer quality or evaluability.
 ├── .env.example
 ├── .claude/skills/              # eda-profiling, sql-conventions, findings-writeup
 ├── docker/
-│   └── docker-compose.yml       # Postgres; the FastAPI service (Phase 3) joins this file
+│   ├── docker-compose.yml       # postgres + cleaning-api
+│   └── Dockerfile               # cleaning-api image
 ├── docs/
 │   └── architecture.md          # component diagram, failure modes, latency/cost (Phase 5)
 ├── scripts/
@@ -65,8 +66,15 @@ especially trade-offs that affect answer quality or evaluability.
 │   │   └── compiler.py           # (metric, dims, filters, time_grain) -> SQL
 │   ├── mcp_server/
 │   │   └── server.py             # FastMCP: list_metrics, describe_metric, query_metric, run_sql
-│   ├── agents/                  # LangGraph graphs: cleaning (Phase 3),
-│   │                            #   supervisor + SQL/analysis/narrative (Phase 4)
+│   ├── agents/
+│   │   └── cleaning/             # profile -> propose -> approve -> apply -> validate (Phase 3)
+│   │       ├── state.py          # CleaningState, FixStrategy, ProfileFinding, FixProposal
+│   │       ├── profiling.py      # deterministic checks (TABLE_CHECKS registry, no LLM)
+│   │       ├── fix_strategies.py # strategy -> SQL, deterministic; apply_fixes (transactional)
+│   │       ├── llm.py            # propose_fixes: the only LLM call in this agent
+│   │       ├── graph.py          # the LangGraph StateGraph + Postgres checkpointer wiring
+│   │       └── api.py            # FastAPI: POST /cleaning-runs, GET .../{id}, POST .../approve
+│   │                             # supervisor + SQL/analysis/narrative agents land here (Phase 4)
 │   ├── slackbot/                 # Slack Bolt app, Socket Mode (Phase 6)
 │   └── eval/                     # golden set + scorers, run from CI (Phase 6)
 ├── tests/                        # mirrors src/ layout
@@ -82,9 +90,28 @@ especially trade-offs that affect answer quality or evaluability.
   node/compiler logic in isolation, not just end-to-end graph runs.
 - SQL style: defined by the `sql-conventions` skill (Phase 1) — use it when writing or
   reviewing queries rather than improvising a style.
-- Agents only touch Postgres through the MCP server's tools, never a direct
-  SQLAlchemy/psycopg connection from agent code — this is what makes the guardrails
-  and tracing in Phase 6 actually enforceable.
+- **Q&A agents** (Phase 4's supervisor/SQL/analysis/narrative agents, the Phase 6
+  Slackbot) only touch Postgres through the MCP server's read-only tools, never a
+  direct SQLAlchemy/psycopg connection — this is what makes the guardrails and
+  tracing in Phase 6 actually enforceable against arbitrary natural-language input.
+  The **cleaning agent** (Phase 3) is the deliberate exception: it's an internal
+  pipeline tool that needs write access, connects directly via `db.app_engine()`,
+  and never goes near user-facing natural language. Don't extend the MCP server
+  with write tools to "unify" this — that would undermine the read-only boundary
+  Phase 6 depends on.
+- An LLM proposes a **strategy + parameters** referencing something it was already
+  given (a `finding_id`, a `metric` name), never raw SQL or an arbitrary identifier.
+  Code resolves the actual table/column and renders the SQL deterministically. This
+  pattern repeats across the semantic layer (Phase 2) and the cleaning agent
+  (Phase 3) on purpose — it's what keeps agent-writable paths auditable without
+  having to validate arbitrary LLM-generated SQL.
+- **The `aie-academy-hub` Foundry deployment rejects forced `tool_choice`**
+  (`{"type": "tool", ...}` / `"any"`) with a 400 — confirmed against both
+  `claude-opus-5-5` and `claude-sonnet-5`, not assumed. Every tool-use call site
+  (Phase 3's `propose_fixes`, Phase 4's planned supervisor/sql/analysis agents) uses
+  the default `"auto"` tool_choice plus an explicit "you must call the tool" prompt
+  instruction, and checks for a `tool_use` block in the response rather than relying
+  on the API to guarantee one.
 
 ## Data: Olist Brazilian e-commerce
 
