@@ -3,13 +3,16 @@ from sqlalchemy import text
 
 from talk_to_your_data.agents.eda.findings_store import (
     ensure_findings_table,
+    get_finding,
     list_findings,
     save_finding,
 )
-from talk_to_your_data.agents.eda.state import Finding
+from talk_to_your_data.agents.eda.state import Finding, SqlResult
 from talk_to_your_data.db import app_engine
 
 pytestmark = pytest.mark.integration
+
+SQL_RESULT = SqlResult(sql="SELECT 1 AS value", columns=["value"], rows=[{"value": 42}])
 
 
 @pytest.fixture
@@ -20,8 +23,8 @@ def clean_findings_table():
         conn.execute(text("DELETE FROM findings.findings WHERE thread_id LIKE 'test-%'"))
 
 
-def test_save_and_list_round_trip(clean_findings_table):
-    finding = Finding(
+def _finding(**overrides) -> Finding:
+    base = dict(
         question="q",
         sql="SELECT 1",
         result_summary="42",
@@ -29,7 +32,12 @@ def test_save_and_list_round_trip(clean_findings_table):
         confidence="high",
         interpretation="it's 42",
     )
-    finding_id = save_finding("test-thread-abc", finding)
+    base.update(overrides)
+    return Finding(**base)
+
+
+def test_save_and_list_round_trip(clean_findings_table):
+    finding_id = save_finding("test-thread-abc", _finding(), SQL_RESULT)
     assert finding_id
 
     rows = list_findings(limit=5)
@@ -37,27 +45,39 @@ def test_save_and_list_round_trip(clean_findings_table):
     assert saved["question"] == "q"
     assert saved["thread_id"] == "test-thread-abc"
     assert saved["confidence"] == "high"
+    assert saved["parent_finding_id"] is None
 
 
 def test_list_findings_orders_by_created_at_desc(clean_findings_table):
-    f1 = Finding(
-        question="first",
-        sql="SELECT 1",
-        result_summary="a",
-        caveats="none",
-        confidence="low",
-        interpretation="x",
-    )
-    f2 = Finding(
-        question="second",
-        sql="SELECT 2",
-        result_summary="b",
-        caveats="none",
-        confidence="low",
-        interpretation="y",
-    )
-    save_finding("test-thread-order", f1)
-    save_finding("test-thread-order", f2)
+    save_finding("test-thread-order", _finding(question="first"), SQL_RESULT)
+    save_finding("test-thread-order", _finding(question="second"), SQL_RESULT)
 
     rows = list_findings(limit=2)
     assert rows[0]["question"] == "second"
+
+
+def test_get_finding_round_trips_result_columns_and_rows(clean_findings_table):
+    finding_id = save_finding("test-thread-get", _finding(), SQL_RESULT)
+
+    fetched = get_finding(finding_id)
+    assert fetched is not None
+    assert fetched["result_columns"] == ["value"]
+    assert fetched["result_rows"] == [{"value": 42}]
+
+
+def test_get_finding_returns_none_for_unknown_id(clean_findings_table):
+    assert get_finding("00000000-0000-0000-0000-000000000000") is None
+
+
+def test_save_finding_links_parent_finding_id(clean_findings_table):
+    parent_id = save_finding("test-thread-parent", _finding(question="parent"), SQL_RESULT)
+    child_id = save_finding(
+        "test-thread-parent",
+        _finding(question="follow-up"),
+        SQL_RESULT,
+        parent_finding_id=parent_id,
+    )
+
+    child = get_finding(child_id)
+    assert child is not None
+    assert child["parent_finding_id"] == parent_id

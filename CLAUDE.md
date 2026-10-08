@@ -47,8 +47,8 @@ especially trade-offs that affect answer quality or evaluability.
 ├── .env.example
 ├── .claude/skills/              # eda-profiling, sql-conventions, findings-writeup
 ├── docker/
-│   ├── docker-compose.yml       # postgres + cleaning-api
-│   └── Dockerfile               # cleaning-api image
+│   ├── docker-compose.yml       # postgres + mcp-server + cleaning-api + eda-api
+│   └── Dockerfile               # shared image; command: overridden per service
 ├── docs/
 │   └── architecture.md          # component diagram, failure modes, latency/cost (Phase 5)
 ├── scripts/
@@ -83,9 +83,10 @@ especially trade-offs that affect answer quality or evaluability.
 │   │       ├── narrative_agent.py # writes the Finding's prose fields
 │   │       ├── supervisor.py     # the routing graph (every worker reports back to it)
 │   │       ├── findings_store.py # durable findings table, independent of the checkpointer
+│   │       ├── followup_agent.py # PandasAI (LiteLLM) over an already-returned finding's rows (Phase 5)
 │   │       ├── ask.py            # ask_question(): protocol-agnostic entry point
 │   │       ├── a2a_executor.py   # A2A AgentExecutor adapter over ask_question()
-│   │       └── api.py            # FastAPI: POST /ask, + A2A agent card/JSON-RPC routes
+│   │       └── api.py            # FastAPI: POST /ask, GET/POST /findings..., + A2A routes
 │   ├── slackbot/                 # Slack Bolt app, Socket Mode (Phase 6)
 │   └── eval/                     # golden set + scorers, run from CI (Phase 6)
 ├── tests/                        # mirrors src/ layout
@@ -133,6 +134,19 @@ especially trade-offs that affect answer quality or evaluability.
   the default `"auto"` tool_choice plus an explicit "you must call the tool" prompt
   instruction, and checks for a `tool_use` block in the response rather than relying
   on the API to guarantee one.
+- **PandasAI (Phase 5) goes through `pandasai-litellm`, not a direct Anthropic
+  integration** — no official `pandasai-anthropic` package exists; confirmed by
+  checking PyPI, not assumed. `LiteLLM(model="anthropic/<model>", api_key=...,
+  api_base=ANTHROPIC_BASE_URL)` routes correctly to the Foundry deployment.
+  PandasAI is the one place in this codebase where an LLM's generated code
+  actually executes — scoped deliberately to an in-memory DataFrame reconstructed
+  from a finding's already-stored rows, never a live DB connection; see
+  `followup_agent.py`'s docstring.
+- The `findings` table's schema has grown via plain idempotent `ALTER TABLE ...
+  ADD COLUMN IF NOT EXISTS` statements in `ensure_findings_table()` (Phase 5 added
+  `result_columns`/`result_rows`/`parent_finding_id` this way) — there's no
+  migration framework in this project, and this project's tables are few and
+  small enough that this hasn't needed to change.
 
 ## Data: Olist Brazilian e-commerce
 

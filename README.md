@@ -11,6 +11,8 @@ Dataset: [Olist Brazilian e-commerce](https://www.kaggle.com/datasets/olistbr/br
 - Build plan, phases, and acceptance criteria: see [ROADMAP.md](ROADMAP.md).
 - Conventions and context for working on this repo (including with Claude Code): see
   [CLAUDE.md](CLAUDE.md).
+- System design, component diagram, failure modes, and the latency/cost rubric: see
+  [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
@@ -43,8 +45,15 @@ curl -X POST localhost:8001/cleaning-runs/<run_id>/approve -H 'content-type: app
 # EDA supervisor agent: ask a business question in plain English
 curl -X POST localhost:8002/ask -H 'content-type: application/json' \
   -d '{"question": "How did monthly revenue trend in 2017?"}'
+# -> {"question": ..., "sql": ..., "result_summary": ..., "caveats": ..., ...}
 # Also reachable over A2A (agent card at /.well-known/agent-card.json, JSON-RPC at /a2a)
 # for external agent-to-agent callers.
+
+# Follow-up question on an already-answered finding (PandasAI, Phase 5 -- operates
+# on the stored result rows, never re-queries Postgres)
+curl "localhost:8002/findings?limit=1"   # find a finding_id from a prior /ask
+curl -X POST localhost:8002/findings/<finding_id>/followup -H 'content-type: application/json' \
+  -d '{"question": "What is the combined total of the top 3?"}'
 ```
 
 Proposing fixes and asking questions both call the LLM (`ANTHROPIC_API_KEY`/

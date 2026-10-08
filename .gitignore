@@ -19,6 +19,9 @@ build/
 .coverage
 htmlcov/
 
+# PandasAI local chart output (Phase 5)
+exports/
+
 # Docker
 docker/pgdata/
 docker/volumes/

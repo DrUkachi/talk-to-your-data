@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 3 complete. Phase 4 not started.**
+**Current status: Phase 5 complete. Phase 6 not started.**
 
 ---
 
@@ -348,11 +348,11 @@ round-trip against a live server; the entire 4-service stack
 
 ---
 
-## Phase 5 — System design
+## Phase 5 — System design ✅
 
-- [ ] `docs/architecture.md`: Mermaid component diagram, failure-modes table,
+- [x] `docs/architecture.md`: Mermaid component diagram, failure-modes table,
       latency and cost estimate per question
-- [ ] PandasAI added as a tool for *follow-up* questions on already-returned query
+- [x] PandasAI added as a tool for *follow-up* questions on already-returned query
       results (not for the initial query — the semantic layer / MCP path stays the only
       way the first query hits Postgres)
 
@@ -360,6 +360,61 @@ round-trip against a live server; the entire 4-service stack
 accuracy. This phase should produce the *rubric* (scoring functions and thresholds),
 which Phase 6's CI eval then reports against — don't leave the rubric implicit until
 the capstone.
+
+### Phase 5 summary
+
+**Built:** `docs/architecture.md` with a Mermaid component diagram covering the full
+6-phase target (built components solid, Phase 6's Slackbot/Langfuse/guardrails/CI-eval
+marked planned/dashed — actually rendered and visually checked with `mermaid-cli`, not
+just assumed to parse); a failure-modes table drawn from what the build actually hit
+or deliberately bounded, not hypothetical; a latency/cost table using call counts
+measured during Phase 4's real testing and current Anthropic pricing, with explicit
+thresholds (flag a regression above 30s p50 latency or $0.15/question) — the rubric
+Phase 6's CI eval reports against. A `followup_agent.py` using PandasAI via
+`pandasai-litellm` (no official Anthropic integration exists) against an in-memory
+DataFrame reconstructed from a finding's *already-stored* rows — extended the
+`findings` table with `result_columns`/`result_rows` (JSONB) and `parent_finding_id`
+so follow-ups never re-query Postgres and never see data the user wasn't already
+shown. New `GET /findings`, `GET /findings/{id}`, `POST /findings/{id}/followup`
+endpoints. 14 new tests, bringing the project total to 115 (55 unit / 52 integration /
+8 llm).
+
+**Verified, not just unit-tested:** `pandasai-litellm` against the real Foundry
+endpoint before writing any production code around it (no `pandasai-anthropic`
+package exists — confirmed on PyPI); all four PandasAI response shapes
+(string/number/dataframe/chart) against the real model; the Mermaid diagram actually
+rendered via `mermaid-cli` (installing missing system libs and a puppeteer
+`--no-sandbox` config along the way) and visually inspected, not just assumed
+syntactically valid; the full follow-up flow through the actual Docker `eda-api`
+container, computing the correct combined total for the top-3-category follow-up
+(matching a value independently computed by hand).
+
+**Key decisions, trade-offs, and bugs actually caught by running things:**
+- *No official `pandasai-anthropic` package* — `pandasai-litellm` plus LiteLLM's
+  `anthropic/<model>` provider (which accepts a custom `api_base`) is the real path,
+  confirmed against `aie-academy-hub` before committing to the design.
+- *Follow-ups reconstruct the DataFrame from stored rows, never re-query* — a
+  follow-up re-running the original SQL could see different data than what the user
+  actually looked at (the underlying tables can change between questions), which
+  would be confusing for "a follow-up on *this* answer." Costs a JSONB column; buys
+  the guarantee that a follow-up's data is always exactly what was already shown.
+- *`last_code_executed` becomes the follow-up `Finding`'s `sql` field* — verified
+  PandasAI v3 runs pandas-over-DuckDB internally and exposes the generated SQL/code
+  directly in its response, so there's genuine transparency to show, not just "trust
+  PandasAI." Same "show the exact thing that produced the number" principle as
+  every other `sql` field in this project, just one level removed.
+- *`Finding.chart_ref` gets populated for the first time this phase* — a "chart"
+  response's value is a **local filesystem path** (`exports/charts/...`). Flagged
+  explicitly in the failure-modes table rather than treated as done: Phase 6 needs
+  to get it somewhere a Slack client can actually fetch it.
+- *I repeated the exact `llm`+`integration` dual-marking mistake* that Phase 4's
+  summary documented as a convention to avoid, in the new `test_followup_agent_live.py`
+  — caught by the same symptom (an `-m integration` run took noticeably longer than
+  expected) before it became a repeated hang. Fixed; the convention evidently needs
+  more than one documented instance to stick, so this note is now the second.
+- *The idempotent-`ALTER TABLE`-as-migration pattern, used since Phase 1/3,
+  continues to hold* at this table count/size — explicitly not introducing a
+  migration framework for a 3-column addition to one table.
 
 ---
 

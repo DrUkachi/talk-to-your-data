@@ -124,7 +124,7 @@ async def narrative_agent_node(state: AgentState) -> dict:
         else None
     )
     finding = write_finding(state["question"], sql_result, analysis_result)
-    save_finding(state["thread_id"], finding)
+    save_finding(state["thread_id"], finding, sql_result)
     return {"finding": finding.model_dump(mode="json"), "status": "done"}
 
 

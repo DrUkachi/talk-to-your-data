@@ -15,11 +15,13 @@ from a2a.server.routes import (
     create_jsonrpc_routes,
 )
 from a2a.server.tasks import InMemoryTaskStore
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .a2a_executor import EdaAgentExecutor
 from .ask import ask_question
+from .findings_store import get_finding, list_findings
+from .followup_agent import answer_followup
 
 app = FastAPI(title="talk-to-your-data EDA agent")
 
@@ -82,4 +84,30 @@ class AskRequest(BaseModel):
 @app.post("/ask")
 async def ask(req: AskRequest) -> dict[str, Any]:
     finding = await ask_question(req.question, thread_id=req.thread_id)
+    return finding.model_dump(mode="json")
+
+
+class FollowupRequest(BaseModel):
+    question: str
+
+
+@app.get("/findings")
+def get_findings(limit: int = 20) -> list[dict[str, Any]]:
+    return list_findings(limit=limit)
+
+
+@app.get("/findings/{finding_id}")
+def get_finding_by_id(finding_id: str) -> dict[str, Any]:
+    finding = get_finding(finding_id)
+    if finding is None:
+        raise HTTPException(404, f"no finding with id '{finding_id}'")
+    return finding
+
+
+@app.post("/findings/{finding_id}/followup")
+def followup(finding_id: str, req: FollowupRequest) -> dict[str, Any]:
+    try:
+        finding = answer_followup(finding_id, req.question)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
     return finding.model_dump(mode="json")

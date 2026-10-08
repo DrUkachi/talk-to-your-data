@@ -39,7 +39,7 @@ def _fake_write_finding(question, sql_result, analysis_result, **kwargs):
     return FAKE_FINDING
 
 
-def _fake_save_finding(thread_id, finding):
+def _fake_save_finding(thread_id, finding, sql_result, parent_finding_id=None):
     return "fake-id"
 
 
