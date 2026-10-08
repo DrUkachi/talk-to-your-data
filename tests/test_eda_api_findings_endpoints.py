@@ -59,7 +59,7 @@ def test_get_finding_by_id_not_found(monkeypatch):
 
 
 def test_followup_endpoint_returns_finding(monkeypatch):
-    def fake_answer_followup(finding_id, question):
+    async def fake_answer_followup(finding_id, question):
         assert finding_id == "parent-id"
         assert question == "and the breakdown?"
         return FOLLOWUP_FINDING
@@ -72,10 +72,21 @@ def test_followup_endpoint_returns_finding(monkeypatch):
 
 
 def test_followup_endpoint_404s_for_unknown_parent(monkeypatch):
-    def fake_answer_followup_raises(finding_id, question):
+    async def fake_answer_followup_raises(finding_id, question):
         raise ValueError(f"no finding with id {finding_id!r}")
 
     monkeypatch.setattr(api, "answer_followup", fake_answer_followup_raises)
     client = TestClient(api.app)
     response = client.post("/findings/does-not-exist/followup", json={"question": "q"})
     assert response.status_code == 404
+
+
+def test_followup_endpoint_returns_a_clean_502_instead_of_a_bare_500(monkeypatch):
+    async def fake_answer_followup_raises(finding_id, question):
+        raise RuntimeError("foundry unreachable")
+
+    monkeypatch.setattr(api, "answer_followup", fake_answer_followup_raises)
+    client = TestClient(api.app, raise_server_exceptions=False)
+    response = client.post("/findings/parent-id/followup", json={"question": "q"})
+    assert response.status_code == 502
+    assert "foundry unreachable" in response.json()["detail"]

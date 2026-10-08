@@ -92,7 +92,9 @@ especially trade-offs that affect answer quality or evaluability.
 │   │       ├── ask.py            # ask_question(): protocol-agnostic entry point
 │   │       ├── a2a_executor.py   # A2A AgentExecutor adapter over ask_question()
 │   │       └── api.py            # FastAPI: POST /ask, GET/POST /findings..., + A2A routes
-│   ├── slackbot/                 # Slack Bolt app, Socket Mode (Phase 6)
+│   ├── slackbot/
+│   │   └── app.py                 # Bolt (Socket Mode), 4th thin adapter over ask_question()/
+│   │                              # answer_followup() -- direct in-process calls, own service (Phase 6c)
 │   └── eval/                     # golden set + scorers, run from CI (Phase 6)
 ├── tests/                        # mirrors src/ layout
 └── data/                         # gitignored; raw Olist CSVs loaded locally
@@ -178,6 +180,48 @@ especially trade-offs that affect answer quality or evaluability.
   raw span). Backend-side, not fixable from this project — see
   `docs/architecture.md`'s failure-modes table before spending time re-debugging
   this from this project's side again.
+- **Every Q&A adapter (REST, A2A, Slack) catches broadly around
+  `ask_question`/`answer_followup` and reports a clean error instead of an
+  uncaught exception** (Phase 6c) — REST returns a 502 with the error text, A2A
+  and Slack post it as a message. `answer_followup` is `async def` (the PandasAI
+  call itself still runs via `asyncio.to_thread`, since PandasAI has no async API)
+  so it can fall back to `ask_question` internally -- see the next bullet.
+- **`answer_followup`'s "never re-query Postgres" guarantee (Phase 5) is correct
+  for a genuine recut of already-shown data, wrong when a follow-up needs a
+  different query entirely** (found via real Slack usage, Phase 6c) — e.g. "break
+  that down by category" after a single aggregate scalar has nothing to recut.
+  `_needs_fresh_data` (a tool-use classifier, same pattern as `scope_guard`/
+  `analysis_agent`) reads PandasAI's own answer and detects a reported data gap;
+  only then does `answer_followup` fall back to a full `ask_question()` call.
+  That fallback call MUST restate the parent question as explicit background
+  before the follow-up (`'A previous question was: "{parent}". As a follow-up,
+  now answer: {question}'`) -- confirmed against the real model that a bare
+  follow-up alone makes `sql_agent` give up (no idea what "that" refers to), and
+  a parenthetical `(follow-up on: ...)` gets the *original* question re-answered
+  instead of the follow-up. Don't simplify this phrasing without re-testing
+  against the real model; it was wrong twice before this shape worked.
+- **Slack delivers both a `message` and an `app_mention` event for one channel
+  mention** (confirmed live, Phase 6c) — the Slackbot subscribes to `message`
+  only and detects mentions by substring-matching `<@bot_user_id>` in the text,
+  with a registered no-op `app_mention` listener just to silence Bolt's
+  "unhandled request" log noise. Don't add a real `app_mention` handler; it
+  would double-answer every mention.
+- **Never wrap a `docker compose run` of a long-lived-connection process (Socket
+  Mode, any persistent listener) in `timeout`** (found the hard way, Phase 6c) —
+  `timeout` killing the wrapping CLI command doesn't reliably propagate into
+  `--rm` actually removing the container. Three orphaned containers from
+  interactive debugging stayed alive for 30+ minutes, each holding its own live
+  Socket Mode connection, causing Slack to round-robin real events across old
+  and new code. Stop it explicitly (`docker stop`/`docker rm`) instead, and
+  `docker ps -a` for stray `*-run-*` containers if behavior looks inconsistent
+  after iterating on a service like this.
+- **matplotlib's first-import font-cache build costs ~30-40s** (confirmed by
+  timing it, Phase 6c) — paid by every service that imports `followup_agent`
+  (`eda-api`, `slackbot`), and looks exactly like a hang (no log output) since
+  neither has a banner to flush stdout early. Pre-warmed in the shared
+  `Dockerfile` (`RUN python -c "import matplotlib.pyplot"`) so it's paid once at
+  build time; `slackbot`'s compose service also sets `PYTHONUNBUFFERED=1` since
+  it has no uvicorn banner to naturally flush logs the way the API services do.
 - **PII masking (Phase 6a) is name-based on OUTPUT columns and
   known-bypassable** — `SELECT geolocation_lat AS x` or `SELECT
   AVG(geolocation_lat)` both evade it, since neither produces a column named

@@ -4,6 +4,7 @@ from sqlalchemy import text
 from talk_to_your_data.agents.eda.findings_store import (
     ensure_findings_table,
     get_finding,
+    get_latest_finding_for_thread,
     list_findings,
     save_finding,
 )
@@ -67,6 +68,20 @@ def test_get_finding_round_trips_result_columns_and_rows(clean_findings_table):
 
 def test_get_finding_returns_none_for_unknown_id(clean_findings_table):
     assert get_finding("00000000-0000-0000-0000-000000000000") is None
+
+
+def test_get_latest_finding_for_thread_returns_the_most_recent(clean_findings_table):
+    save_finding("test-thread-latest", _finding(question="first"), SQL_RESULT)
+    second_id = save_finding("test-thread-latest", _finding(question="second"), SQL_RESULT)
+
+    latest = get_latest_finding_for_thread("test-thread-latest")
+    assert latest is not None
+    assert latest["id"] == second_id
+    assert latest["question"] == "second"
+
+
+def test_get_latest_finding_for_thread_returns_none_for_unknown_thread(clean_findings_table):
+    assert get_latest_finding_for_thread("test-thread-never-existed") is None
 
 
 def test_save_finding_links_parent_finding_id(clean_findings_table):

@@ -32,7 +32,12 @@ uv run pytest                  # fast, no DB or LLM required
 uv run pytest -m integration    # requires the steps above to have run
 uv run pytest -m llm            # calls the real model; needs credentials (+ MCP server for some)
 
-# `docker compose up -d` above also started mcp-server, cleaning-api, and eda-api.
+# `docker compose up -d` above also started mcp-server, cleaning-api, eda-api, and
+# slackbot. The Slackbot needs SLACK_BOT_TOKEN/SLACK_APP_TOKEN in .env (a Slack app
+# with Socket Mode enabled, scopes app_mentions:read/chat:write/channels:history or
+# im:history/files:write) -- without those it'll fail to connect; everything else
+# above works regardless. Once connected: @-mention it or DM it with a question,
+# then just reply in that thread (no need to re-mention) to ask a follow-up.
 
 # Cleaning agent API
 curl -X POST localhost:8001/cleaning-runs -H 'content-type: application/json' \

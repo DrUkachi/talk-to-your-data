@@ -92,3 +92,15 @@ def test_ask_endpoint_returns_a_finding(monkeypatch):
     response = client.post("/ask", json={"question": "what is the answer?"})
     assert response.status_code == 200
     assert response.json()["result_summary"] == "42"
+
+
+def test_ask_endpoint_returns_a_clean_502_instead_of_a_bare_500(monkeypatch):
+    async def fake_ask_question_raises(question, thread_id=None):
+        raise RuntimeError("mcp server unreachable")
+
+    monkeypatch.setattr(api, "ask_question", fake_ask_question_raises)
+
+    client = TestClient(api.app, raise_server_exceptions=False)
+    response = client.post("/ask", json={"question": "what is the answer?"})
+    assert response.status_code == 502
+    assert "mcp server unreachable" in response.json()["detail"]

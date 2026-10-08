@@ -76,5 +76,26 @@ services:
       mcp-server:
         condition: service_started
 
+  slackbot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "talk_to_your_data.slackbot.app"]
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      MCP_SERVER_HOST: mcp-server
+      # No uvicorn banner to naturally flush stdout like the other services
+      # have -- without this, Bolt's own startup/connection logs sat invisible
+      # in Python's block-buffered stdout for a non-tty process, which made a
+      # slow cold start (see the Dockerfile's matplotlib note) look like a hang.
+      PYTHONUNBUFFERED: "1"
+    # No ports -- Socket Mode is an outbound connection, nothing to listen on.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-server:
+        condition: service_started
+
 volumes:
   pgdata:

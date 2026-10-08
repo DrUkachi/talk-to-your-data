@@ -115,6 +115,22 @@ def list_findings(limit: int = 20) -> list[dict[str, Any]]:
     return [_normalize_row(row) for row in rows]
 
 
+def get_latest_finding_for_thread(thread_id: str) -> dict[str, Any] | None:
+    """Phase 6c's Slackbot uses this to decide whether a message replying inside
+    a Slack thread is a follow-up on that thread's most recent finding, or an
+    unrelated thread it's never answered in (see slackbot/app.py)."""
+    with app_engine().connect() as conn:
+        result = conn.execute(
+            text(
+                f'SELECT * FROM "{SCHEMA}"."findings" WHERE thread_id = :thread_id '
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"thread_id": thread_id},
+        )
+        row = result.mappings().first()
+    return _normalize_row(dict(row)) if row is not None else None
+
+
 def get_finding(finding_id: str) -> dict[str, Any] | None:
     with app_engine().connect() as conn:
         result = conn.execute(

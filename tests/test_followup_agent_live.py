@@ -27,7 +27,7 @@ pytestmark = [
 ]
 
 
-def test_followup_answers_against_parent_rows_and_links_finding():
+async def test_followup_answers_against_parent_rows_and_links_finding():
     ensure_findings_table()
     parent_result = SqlResult(
         sql="SELECT product_category, revenue FROM ...",
@@ -48,7 +48,9 @@ def test_followup_answers_against_parent_rows_and_links_finding():
     )
     parent_id = save_finding("test-followup-live", parent_finding, parent_result)
 
-    child = answer_followup(parent_id, "What is the total revenue across all three categories?")
+    child = await answer_followup(
+        parent_id, "What is the total revenue across all three categories?"
+    )
     assert child.question == "What is the total revenue across all three categories?"
 
     stored = get_finding(parent_id)

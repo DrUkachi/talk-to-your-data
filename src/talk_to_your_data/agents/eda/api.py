@@ -83,7 +83,11 @@ class AskRequest(BaseModel):
 
 @app.post("/ask")
 async def ask(req: AskRequest) -> dict[str, Any]:
-    finding = await ask_question(req.question, thread_id=req.thread_id)
+    try:
+        finding = await ask_question(req.question, thread_id=req.thread_id)
+    except Exception as e:  # noqa: BLE001 -- surfaced as a clean 502, not a bare 500;
+        # matches a2a_executor's "report as text, don't crash the adapter" pattern.
+        raise HTTPException(502, f"couldn't answer that: {e}") from e
     return finding.model_dump(mode="json")
 
 
@@ -105,9 +109,11 @@ def get_finding_by_id(finding_id: str) -> dict[str, Any]:
 
 
 @app.post("/findings/{finding_id}/followup")
-def followup(finding_id: str, req: FollowupRequest) -> dict[str, Any]:
+async def followup(finding_id: str, req: FollowupRequest) -> dict[str, Any]:
     try:
-        finding = answer_followup(finding_id, req.question)
+        finding = await answer_followup(finding_id, req.question)
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+    except Exception as e:  # noqa: BLE001 -- same "clean 502, not a bare 500" fix as /ask
+        raise HTTPException(502, f"couldn't answer that: {e}") from e
     return finding.model_dump(mode="json")

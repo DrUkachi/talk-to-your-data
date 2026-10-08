@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 6b (Langfuse tracing) complete. Phase 6c (Slackbot) not started.**
+**Current status: Phase 6c (Slackbot) complete. Phase 6d (Eval suite + CI) not started.**
 
 ---
 
@@ -587,11 +587,109 @@ confirming the extra spans don't change routing or answers.
 
 ---
 
-### Phase 6c — Slackbot
+### Phase 6c — Slackbot ✅
 
-- [ ] Slack Bolt app (Socket Mode): question in thread → answer + chart + SQL posted
+- [x] Slack Bolt app (Socket Mode): question in thread → answer + chart + SQL posted
       in-thread, as a thin adapter over `ask_question()`/`answer_followup()` (same
       pattern as the REST and A2A adapters)
+- [x] Thread-based follow-up detection: a reply in a thread the bot already
+      answered in is routed to `answer_followup`, no re-mention needed
+- [x] Chart upload via `files_upload_v2` — closes the "chart_ref is a local path,
+      not reachable from Slack" gap from Phase 5's failure-modes table
+- [x] Uniform error handling across all three adapters (REST, A2A, Slack) — the
+      `/ask`/`/findings/.../followup` REST endpoints no longer surface an
+      uncaught exception as a bare 500
+
+#### Phase 6c summary
+
+**Built:** `slackbot/app.py` — a single `message`-event handler (not `message` +
+`app_mention` both; confirmed live that Slack delivers both for one channel
+mention, which would double-fire a handler subscribed to both) that maps Slack's
+own threading onto the existing protocol-agnostic core: a DM or an explicit
+@-mention starts a new `ask_question()`; a reply in a thread this bot already has
+a finding for goes to `answer_followup()` regardless of mention. Runs as its own
+Docker Compose service, calling `ask_question`/`answer_followup` directly
+in-process (not over HTTP to `eda-api`) — the same reason this makes chart upload
+straightforward: the PNG `answer_followup` produces lands on *this* process's own
+disk. `findings_store.get_latest_finding_for_thread()` is the one new piece of
+shared state this adapter needed. `api.py`'s two endpoints now catch broadly and
+return a clean 502 instead of an uncaught 500, closing a gap Phase 5's
+failure-modes table flagged explicitly. 27 new tests, bringing the project total
+to 194 (116 unit / 58 integration / 20 llm).
+
+**Verified, not just unit-tested — and this phase is where real usage (not a
+written test) found the two most significant bugs in the whole project so far:**
+built the image, brought up the full 5-service stack via `docker compose up -d`,
+confirmed Socket Mode connects for real (`auth.test`, `apps.connections.open`,
+and a live test message all hit before writing a line of handler code), then
+actually used it from a real Slack workspace.
+
+1. **A regression from testing itself, not the code**: after the first live
+   question, a follow-up reply got answered twice, inconsistently, by what
+   looked like stale logic. Root cause: three *orphaned* `docker compose run`
+   containers from earlier interactive debugging were still alive (`timeout N
+   docker compose run --rm ...`, where the `timeout` killing the wrapping CLI
+   command doesn't reliably propagate into `--rm` actually removing the
+   container) — each with its own live Socket Mode connection, so Slack was
+   round-robining events across old and new code. Fixed by finding and removing
+   them (`docker ps -a` showed three `docker-slackbot-run-*` containers up for
+   30+ minutes); the lesson (noted in CLAUDE.md) is to never wrap a
+   long-lived-connection `docker compose run` in `timeout` for debugging --
+   stop it explicitly instead.
+2. **A real, product-level bug, found only by actually asking a two-turn
+   question in Slack**: "what was total revenue" followed by "break that down by
+   category" produced an honest-sounding but wrong answer -- "can't be broken
+   down, no category column." Root cause: Phase 5's `answer_followup` guarantee
+   (never query Postgres, only ever see the parent finding's *already-returned*
+   rows) is correct for a genuine recut of shown data, but the parent finding
+   here was a single aggregate scalar with nothing to recut. Fixed with a new
+   `_needs_fresh_data` classifier (same tool-use pattern as `scope_guard`/
+   `analysis_agent`) that reads PandasAI's own answer and detects a reported
+   data gap versus a genuine answer; only on a detected gap does `answer_followup`
+   fall back to a full `ask_question()` call. Getting the fallback's phrasing
+   right took three real attempts against the live model, each confirmed before
+   moving on, not assumed: the bare follow-up text alone made `sql_agent` give up
+   with no tool call (no idea what "that" refers to); a parenthetical
+   `"(follow-up on: ...)"` gave it context but the *original* question's answer
+   got silently re-run verbatim, the follow-up's actual ask effectively ignored;
+   leading with the original question as explicit background and an imperative
+   "now answer" for the follow-up is what actually produced a correct category
+   breakdown. `answer_followup` had to become `async def` to call `ask_question`
+   internally (the REST endpoint and its tests updated accordingly); the
+   PandasAI call itself stayed wrapped in `asyncio.to_thread` since PandasAI has
+   no async API of its own.
+
+Also caught before either of those, while confirming the Slack app had every
+permission the plan needed: `files:write` was missing from the bot's OAuth
+scopes (confirmed via a real `auth.test` call, not assumed from the setup
+instructions) -- the user added it and reinstalled, confirmed again via a real
+`files_upload_v2` call, not just the scopes list. And: cold-starting the
+Slackbot (or `eda-api`) took ~30-40s with no log output at all, which looked
+like a hang -- timed it and found matplotlib's first-import font-cache build is
+the actual cost (confirmed, not assumed), paid by every service that imports
+`followup_agent`. Fixed by pre-warming the cache in the shared `Dockerfile`
+(`RUN python -c "import matplotlib.pyplot"`) so it's paid once at build time, not
+once per container start; also added `PYTHONUNBUFFERED=1` to the slackbot
+service so its logs stream in real time instead of sitting in a block buffer
+with no uvicorn banner to flush it.
+
+**Key decisions and trade-offs:**
+- *In-process direct calls, not HTTP to `eda-api`* — same pattern as the REST/A2A
+  adapters (both call `ask_question` directly within the same process), and what
+  makes chart upload trivial instead of requiring shared storage across
+  containers.
+- *No channel allow-list* — Slack's own invite-to-channel/DM mechanism is the
+  trust boundary, same as any other Slack app; a separate ACL layer would be
+  scope beyond what's asked.
+- *The fresh-data fallback's resulting finding has no `parent_finding_id`* — it's
+  not actually derived from the parent's data anymore, so tagging it as a "child"
+  of the aggregate-only parent would misrepresent the lineage. `thread_id` still
+  matches, so the Slackbot's thread-based follow-up detection keeps working on
+  whatever comes next in that thread.
+- *A no-op `app_mention` listener, registered on purpose* — without one, Bolt
+  logs every single mention as an "Unhandled request" 404, since `handle_message`
+  (deliberately the only real listener) already covers mentions. Silences log
+  noise without silently dropping the duplicate event somewhere less visible.
 
 ### Phase 6d — Eval suite + CI
 

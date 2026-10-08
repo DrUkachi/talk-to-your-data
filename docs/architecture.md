@@ -1,11 +1,11 @@
 # Architecture
 
 System design for the full 6-phase target, not just what's built so far. Phases
-1-5 (foundation through PandasAI follow-ups), Phase 6a (guardrails), and Phase 6b
-(Langfuse tracing) are built and tested; the rest of Phase 6 (Slackbot, CI eval)
-is marked **planned** below — this doc exists so Phase 6 has a design to build
-against, not a blank page. The component diagram below hasn't been updated to
-show the guardrails layer explicitly yet since it sits inside
+1-5 (foundation through PandasAI follow-ups), Phase 6a (guardrails), Phase 6b
+(Langfuse tracing), and Phase 6c (Slackbot) are built and tested; Phase 6d (CI
+eval) is marked **planned** below — this doc exists so Phase 6 has a design to
+build against, not a blank page. The component diagram below hasn't been updated
+to show the guardrails layer explicitly yet since it sits inside
 `mcp-server`/`eda-api` rather than as a separate service — see the
 failure-modes table for what's actually built there.
 
@@ -19,12 +19,15 @@ flowchart TB
     end
 
     subgraph Phase6["Phase 6 - planned, not yet built"]
-        Slackbot["Slackbot - Bolt, Socket Mode"]
         CIEval["CI eval suite - 40 questions"]
         Guardrails["Guardrails - SQL allow-list, PII masking, refusal"]
     end
 
     Langfuse["Langfuse tracing - built, Phase 6b"]
+
+    subgraph SlackbotSvc["slackbot service - built, Phase 6c"]
+        Slackbot["Bolt app - Socket Mode"]
+    end
 
     subgraph EdaApi["eda-api service - Phase 4 and 5"]
         Ask["POST /ask"]
@@ -54,7 +57,8 @@ flowchart TB
     end
 
     User --> Slackbot
-    Slackbot -.-> Ask
+    Slackbot --> Supervisor
+    Slackbot --> FollowupAgent
     A2AClient --> A2ARoutes
     Ask --> Supervisor
     A2ARoutes --> Supervisor
@@ -65,6 +69,7 @@ flowchart TB
     NarrativeAgent --> Findings
     FindingsRoutes --> FollowupAgent
     FollowupAgent --> Findings
+    FollowupAgent -.-> Supervisor
     McpTools --> SemanticLayer
     SemanticLayer --> Raw
     CleaningGraph --> Clean
@@ -81,7 +86,7 @@ flowchart TB
     Slackbot -.-> Guardrails
 
     classDef planned stroke-dasharray: 5 5
-    class Slackbot,CIEval,Guardrails planned
+    class CIEval,Guardrails planned
 ```
 
 Two design throughlines worth calling out explicitly, since they're the reason
@@ -107,14 +112,15 @@ not a hypothetical list.
 
 | Failure | Current behavior | Gap / what Phase 6 needs to do |
 |---|---|---|
-| MCP server unreachable | `sql_agent` raises `RuntimeError` after exhausting its tool-use loop; supervisor eventually hits `max_turns` and marks the run `failed` | Bounded, but the plain `POST /ask`/`/cleaning-runs` endpoints don't catch this — it surfaces as an uncaught 500. The A2A executor already catches and reports as text; the REST endpoints don't. **Inconsistent, worth fixing before Phase 6**, not papering over. |
-| Foundry/Anthropic API down or rate-limited | Same uncaught-exception gap as above at any LLM call site | Needs the guardrail layer's error handling to be uniform across all three entry points (REST, A2A, Slack) |
-| Postgres unreachable | Any `app_engine()`/`readonly_engine()` call raises; same uncaught-exception gap | Same fix as above |
+| MCP server unreachable | `sql_agent` raises `RuntimeError` after exhausting its tool-use loop; supervisor eventually hits `max_turns` and marks the run `failed` | **Built (Phase 6c).** All three entry points now catch broadly: REST returns a clean 502 instead of an uncaught 500, A2A and Slack post the error as a message — uniform, not just the A2A executor as before |
+| Foundry/Anthropic API down or rate-limited | Same uncaught-exception gap as above at any LLM call site | **Built (Phase 6c).** Same uniform catch-and-report fix as above, applies at any LLM call site |
+| Postgres unreachable | Any `app_engine()`/`readonly_engine()` call raises | **Built (Phase 6c).** Same uniform catch-and-report fix as above |
 | Supervisor loop never converges | Hard-capped at `max_turns=8`, returns `status: "failed"` rather than looping forever | Working as intended; Phase 6 should decide what the Slackbot says on `failed` (currently `ask_question` just raises) |
 | `sql_agent` tool-use loop never converges | Hard-capped at 6 turns, raises `RuntimeError` | Same |
 | Cleaning-agent run left `awaiting_approval` forever | No TTL — the checkpoint just sits there | Not addressed; a real deployment needs either a TTL/cleanup job or to accept this as an acceptable operational characteristic for a low-volume internal tool |
 | Semantic layer has no date-range filter | Phase 4's `analysis_agent` works around this *only* for `time_series_trend` questions (extracts a start/end and filters in pandas) | A simple point-value question naming a specific date range (not a trend) has no equivalent workaround — `sql_agent` would need to fall back to `run_sql` itself, which is possible but not guaranteed |
-| PandasAI follow-up produces a chart | `chart_ref` is set to a **local filesystem path** (`exports/charts/...`) | Not reachable from Slack as-is; Phase 6 needs to either upload it somewhere fetchable or post the file directly via Slack's file-upload API |
+| PandasAI follow-up produces a chart | **Built (Phase 6c).** The Slackbot calls `answer_followup` directly in-process (not over HTTP to `eda-api`), so `chart_ref`'s local PNG path is on the Slackbot's own disk — uploaded via `files_upload_v2` in the same thread. Confirmed with a real file upload before relying on it, not just the OAuth scope. | None for Slack. The REST `/findings/{id}/followup` response still just returns the local path as-is — fine for this project's single-consumer-is-Slack scope, would need object storage for a REST client on a different host |
+| `answer_followup` asked for data its parent finding doesn't have (e.g. "break that down by category" after a single aggregate) | **Built (Phase 6c), found via real Slack usage, not a written test.** Phase 5's "only ever see already-returned rows" guarantee is correct for a genuine recut but wrong here — there's nothing to recut. `_needs_fresh_data` classifies PandasAI's own answer as a reported data gap vs. a genuine answer; on a gap, falls back to a full `ask_question()` call, restating the parent question as explicit background first (two earlier phrasings were tried and failed against the real model before this one worked — see ROADMAP's Phase 6c summary) | None — covered. The fallback's finding has no `parent_finding_id` (it's not actually derived from the parent's data), by design |
 | `run_sql` receives a data-modifying CTE | **Built (Phase 6a).** `sql_guard.validate_sql` walks the full AST, not just the top-level statement type (a data-modifying CTE's outer node parses as a harmless `Select`) — confirmed by parsing one, not assumed. Readonly DB role rejects it too (defense in depth), now redundantly. | None — covered, with tests proving both layers independently |
 | A query asks for more rows than it should get | **Built (Phase 6a).** Hard ceiling (`MAX_ROW_LIMIT=1000`), clamped regardless of what's requested | None |
 | Geolocation/zip columns leak via `run_sql` | **Built (Phase 6a), with a known, documented gap.** Masking matches OUTPUT column names — `SELECT geolocation_lat AS x` or `SELECT AVG(geolocation_lat)` both evade it entirely (no column provenance tracking through arbitrary SQL). `test_sql_guard.py` has a test *proving* the bypass exists, not just absence-of-bypass tests. | Would need column-provenance tracking or masked Postgres views to close properly — a real scope increase, deliberately not taken this phase |
