@@ -12,6 +12,9 @@ from typing import Any, cast
 
 import anthropic
 from fastmcp import Client
+from langfuse import get_client, observe
+
+from talk_to_your_data.tracing import record_generation
 
 from .mcp_tools import call_tool, list_anthropic_tools, mcp_server_url
 from .state import SqlResult
@@ -36,25 +39,31 @@ def _client() -> anthropic.Anthropic:
     )
 
 
+@observe(name="sql_agent", as_type="agent")
 async def run_sql_agent(
     question: str, *, llm_client: anthropic.Anthropic | None = None, mcp_url: str | None = None
 ) -> SqlResult:
     llm_client = llm_client or _client()
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+    langfuse = get_client()
 
     async with Client(mcp_url or mcp_server_url()) as mcp_client:
         tools = await list_anthropic_tools(mcp_client)
         messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
         last_result: SqlResult | None = None
 
-        for _ in range(MAX_TURNS):
-            response = llm_client.messages.create(
-                model=model,
-                max_tokens=2048,
-                system=SYSTEM_PROMPT,
-                tools=tools,
-                messages=cast(list[anthropic.types.MessageParam], messages),
-            )
+        for turn in range(MAX_TURNS):
+            with langfuse.start_as_current_observation(
+                name=f"sql_agent-turn-{turn}", as_type="generation"
+            ):
+                response = llm_client.messages.create(
+                    model=model,
+                    max_tokens=2048,
+                    system=SYSTEM_PROMPT,
+                    tools=tools,
+                    messages=cast(list[anthropic.types.MessageParam], messages),
+                )
+                record_generation(response)
             messages.append({"role": "assistant", "content": response.content})
 
             tool_uses = [b for b in response.content if b.type == "tool_use"]
@@ -63,7 +72,11 @@ async def run_sql_agent(
 
             tool_results = []
             for tool_use in tool_uses:
-                result = await call_tool(mcp_client, tool_use.name, dict(tool_use.input))
+                with langfuse.start_as_current_observation(
+                    name=tool_use.name, as_type="tool", input=tool_use.input
+                ) as tool_span:
+                    result = await call_tool(mcp_client, tool_use.name, dict(tool_use.input))
+                    tool_span.update(output=result)
                 if tool_use.name in ("query_metric", "run_sql") and isinstance(result, dict):
                     last_result = SqlResult(
                         sql=result["sql"], columns=result["columns"], rows=result["rows"]

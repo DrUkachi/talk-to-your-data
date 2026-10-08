@@ -59,6 +59,8 @@ especially trade-offs that affect answer quality or evaluability.
 ├── src/talk_to_your_data/
 │   ├── db.py                     # app_engine() / readonly_engine() factories
 │   ├── checkpointer.py           # shared Postgres checkpointer (sync + async) for every graph
+│   ├── tracing.py                # record_generation(): attaches real model/usage/cost to the
+│   │                              # current Langfuse span after a client.messages.create() call (Phase 6b)
 │   ├── guardrails/                # cross-cutting, not nested under one agent (Phase 6a)
 │   │   ├── sql_guard.py           # sqlglot parse/validate, row-limit policy, output masking
 │   │   └── scope_guard.py        # out-of-scope classifier, gates ask_question() before the graph
@@ -158,6 +160,24 @@ especially trade-offs that affect answer quality or evaluability.
   `SELECT` also parse as `exp.Table` with no schema — excluded from the
   "must be schema-qualified" check via the CTE's own alias set, or every
   `WITH x AS (...) SELECT * FROM x` query would be falsely rejected.
+- **Every direct Anthropic call site is `@observe(as_type="generation")` +
+  `tracing.record_generation(response)` right after `client.messages.create(...)`**
+  (Phase 6b) — not Langfuse's recommended auto-instrumentor, which was tested for
+  real and left model/usage/cost unpopulated by default. `record_generation` expects
+  a real `anthropic.types.Message` shape (`.model`, `.usage.input_tokens`,
+  `.usage.output_tokens`); test stubs for these call sites must include `.usage`/
+  `.model`, not just `.content` — found this the hard way when adding tracing broke
+  5 existing stub-based unit tests. `answer_followup` (PandasAI) is the one
+  exception — no raw `Message` to read off — covered by LiteLLM's native
+  `litellm.success_callback = ["langfuse"]` instead, which logs to its own,
+  separate, unlinked trace.
+- **Confirmed, reproducible gap: this project's Langfuse Cloud org does not
+  surface `model`/`usage_details`/`cost_details` on query-back** (`client.api.
+  observations.get_many`) even 60+ seconds after a real traced call, despite the
+  SDK emitting the correct OTel span attributes locally (verified by inspecting a
+  raw span). Backend-side, not fixable from this project — see
+  `docs/architecture.md`'s failure-modes table before spending time re-debugging
+  this from this project's side again.
 - **PII masking (Phase 6a) is name-based on OUTPUT columns and
   known-bypassable** — `SELECT geolocation_lat AS x` or `SELECT
   AVG(geolocation_lat)` both evade it, since neither produces a column named

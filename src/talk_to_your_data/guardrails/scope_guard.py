@@ -16,6 +16,9 @@ import os
 from typing import Any
 
 import anthropic
+from langfuse import observe
+
+from talk_to_your_data.tracing import record_generation
 
 SCOPE_CHECK_TOOL: anthropic.types.ToolParam = {
     "name": "check_scope",
@@ -51,6 +54,7 @@ def _client() -> anthropic.Anthropic:
     )
 
 
+@observe(name="check_scope", as_type="generation")
 def check_scope(
     question: str,
     *,
@@ -73,6 +77,7 @@ def check_scope(
         tools=[SCOPE_CHECK_TOOL],
         messages=[{"role": "user", "content": prompt}],
     )
+    record_generation(response)
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
     if tool_use is None:
         raise RuntimeError("scope_guard: model did not call check_scope")

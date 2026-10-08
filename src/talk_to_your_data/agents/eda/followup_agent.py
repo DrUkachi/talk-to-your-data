@@ -17,14 +17,28 @@ same transparency principle as everywhere else: show the exact thing that produc
 the number. A "chart" response's value is a local PNG path -- the first time
 Finding.chart_ref is ever populated; Phase 6 still needs to get it somewhere a
 Slack client can actually fetch it (see docs/architecture.md's failure-modes table).
+
+Tracing: this is the one Anthropic call site PandasAI owns internally (df.chat()
+never hands back the raw Message), so the explicit record_generation() pattern used
+everywhere else in this project can't apply -- there's no response object to read
+model/usage/cost off of. LiteLLM ships its own Langfuse integration for exactly
+this (`litellm.success_callback`/`failure_callback`), verified for real against the
+Foundry endpoint before relying on it. It logs independently of this project's
+`@observe`-based spans, so the resulting generation lands as its own trace rather
+than nested under answer_followup's -- a real gap (no parent/child link), accepted
+rather than solved, since giving it one would mean reconfiguring PandasAI's global
+LLM singleton per-call with the current trace/observation id, for a follow-up path
+that already carries a documented best-effort posture elsewhere in Phase 6a.
 """
 
 import os
 import threading
 from typing import Any
 
+import litellm
 import pandas as pd
 import pandasai as pai
+from langfuse import observe
 from pandasai_litellm import LiteLLM
 
 from .findings_store import get_finding, save_finding
@@ -49,6 +63,8 @@ def _ensure_configured() -> None:
             api_base=os.environ.get("ANTHROPIC_BASE_URL") or None,
         )
         pai.config.set({"llm": llm})
+        litellm.success_callback = ["langfuse"]
+        litellm.failure_callback = ["langfuse"]
         _configured = True
 
 
@@ -68,6 +84,7 @@ def _normalize_response(response_dict: dict[str, Any]) -> tuple[SqlResult, str |
     return SqlResult(sql=code, columns=["answer"], rows=[{"answer": value}]), None
 
 
+@observe(name="answer_followup", as_type="agent")
 def answer_followup(finding_id: str, question: str) -> Finding:
     parent = get_finding(finding_id)
     if parent is None:

@@ -14,6 +14,9 @@ from datetime import datetime
 from typing import Any
 
 import anthropic
+from langfuse import observe
+
+from talk_to_your_data.tracing import record_generation
 
 from .state import AnalysisLens, AnalysisResult, SqlResult
 
@@ -52,6 +55,7 @@ def _client() -> anthropic.Anthropic:
     )
 
 
+@observe(name="classify_lens", as_type="generation")
 def _classify(
     question: str,
     sql_result: SqlResult,
@@ -82,6 +86,7 @@ def _classify(
         tools=[CLASSIFY_LENS_TOOL],
         messages=[{"role": "user", "content": prompt}],
     )
+    record_generation(response)
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
     if tool_use is None:
         raise RuntimeError("analysis_agent: model did not call classify_lens")

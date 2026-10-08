@@ -4552,7 +4552,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.40" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=0.2" },
-    { name = "langfuse", specifier = ">=2.50" },
+    { name = "langfuse", specifier = ">=4.0" },
     { name = "langgraph", specifier = ">=0.2" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=2.0" },
     { name = "pandas", specifier = ">=2.2" },

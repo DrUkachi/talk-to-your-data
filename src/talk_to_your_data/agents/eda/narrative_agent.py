@@ -10,6 +10,9 @@ import os
 from typing import Any
 
 import anthropic
+from langfuse import observe
+
+from talk_to_your_data.tracing import record_generation
 
 from .state import AnalysisResult, Finding, SqlResult
 
@@ -52,6 +55,7 @@ def _client() -> anthropic.Anthropic:
     )
 
 
+@observe(name="write_finding", as_type="generation")
 def write_finding(
     question: str,
     sql_result: SqlResult,
@@ -79,6 +83,7 @@ def write_finding(
         tools=[WRITE_FINDING_TOOL],
         messages=[{"role": "user", "content": prompt}],
     )
+    record_generation(response)
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
     if tool_use is None:
         raise RuntimeError("narrative_agent: model did not call write_finding")

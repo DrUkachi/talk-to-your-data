@@ -1,13 +1,13 @@
 # Architecture
 
 System design for the full 6-phase target, not just what's built so far. Phases
-1-5 (foundation through PandasAI follow-ups) and Phase 6a (guardrails) are built
-and tested; the rest of Phase 6 (Langfuse tracing, Slackbot, CI eval) is marked
-**planned** below — this doc exists so Phase 6 has a design to build against,
-not a blank page. The component diagram below hasn't been updated to show the
-guardrails layer explicitly yet since it sits inside `mcp-server`/`eda-api`
-rather than as a separate service — see the failure-modes table for what's
-actually built there.
+1-5 (foundation through PandasAI follow-ups), Phase 6a (guardrails), and Phase 6b
+(Langfuse tracing) are built and tested; the rest of Phase 6 (Slackbot, CI eval)
+is marked **planned** below — this doc exists so Phase 6 has a design to build
+against, not a blank page. The component diagram below hasn't been updated to
+show the guardrails layer explicitly yet since it sits inside
+`mcp-server`/`eda-api` rather than as a separate service — see the
+failure-modes table for what's actually built there.
 
 ## Component diagram
 
@@ -20,10 +20,11 @@ flowchart TB
 
     subgraph Phase6["Phase 6 - planned, not yet built"]
         Slackbot["Slackbot - Bolt, Socket Mode"]
-        Langfuse["Langfuse tracing"]
         CIEval["CI eval suite - 40 questions"]
         Guardrails["Guardrails - SQL allow-list, PII masking, refusal"]
     end
+
+    Langfuse["Langfuse tracing - built, Phase 6b"]
 
     subgraph EdaApi["eda-api service - Phase 4 and 5"]
         Ask["POST /ask"]
@@ -70,14 +71,17 @@ flowchart TB
     CleaningGraph --> Raw
     Supervisor -.-> LangGraphSchema
     CleaningGraph -.-> LangGraphSchema
+    Supervisor -.-> Langfuse
     SqlAgent -.-> Langfuse
+    AnalysisAgent -.-> Langfuse
     NarrativeAgent -.-> Langfuse
+    FollowupAgent -.-> Langfuse
     CleaningGraph -.-> Langfuse
     CIEval -.-> EdaApi
     Slackbot -.-> Guardrails
 
     classDef planned stroke-dasharray: 5 5
-    class Slackbot,Langfuse,CIEval,Guardrails planned
+    class Slackbot,CIEval,Guardrails planned
 ```
 
 Two design throughlines worth calling out explicitly, since they're the reason
@@ -115,7 +119,7 @@ not a hypothetical list.
 | A query asks for more rows than it should get | **Built (Phase 6a).** Hard ceiling (`MAX_ROW_LIMIT=1000`), clamped regardless of what's requested | None |
 | Geolocation/zip columns leak via `run_sql` | **Built (Phase 6a), with a known, documented gap.** Masking matches OUTPUT column names — `SELECT geolocation_lat AS x` or `SELECT AVG(geolocation_lat)` both evade it entirely (no column provenance tracking through arbitrary SQL). `test_sql_guard.py` has a test *proving* the bypass exists, not just absence-of-bypass tests. | Would need column-provenance tracking or masked Postgres views to close properly — a real scope increase, deliberately not taken this phase |
 | Out-of-scope question (weather, general knowledge, injection attempts) | **Built (Phase 6a).** `scope_guard.check_scope` gates `ask_question()` before the supervisor graph starts — verified against real in-scope questions (not falsely refused), real out-of-scope questions (refused), and adversarial/injection-flavored prompts against the classifier itself (held, but not proof against all such attempts — an LLM classifier is manipulable in principle; the structural backstop is that `sql_agent` can only ever reach Postgres through read-only MCP tools regardless of what the classifier decides) | Phase 6d's golden set is where borderline/ambiguous cases get rigorously scored, not just smoke-tested |
-| No tracing yet | Nothing is instrumented with Langfuse | Phase 6b scope; every LLM call site in this codebase is already a narrow, named function (`propose_fixes`, `run_sql_agent`, `analyze`, `write_finding`, `_route`, `answer_followup`, `check_scope`) specifically so wrapping them for tracing later is mechanical, not a refactor |
+| Langfuse query-back doesn't expose model/usage/cost | **Built (Phase 6b).** Every direct Anthropic call site (`propose_fixes`, `run_sql_agent`'s per-turn loop, `classify_lens`, `write_finding`, `_route`, `check_scope`) is wrapped in `@observe(as_type="generation")` plus an explicit `record_generation()` call that forwards the real model/usage/cost onto the current span — not the auto-instrumentor (tested; it left those fields empty by default). Verified the SDK emits the right OTel span attributes locally, and separately confirmed (polling `client.api.observations.get_many` for 60+s after a real traced call) that this Langfuse Cloud org's own query-back API still returns `model`/`usage_details`/`cost_details` as `None` regardless — a backend-side gap, not something fixable from this project's side. `answer_followup` (PandasAI/LiteLLM) is the one call site with no raw `Message` to read usage off of — covered instead by LiteLLM's own native Langfuse callback, which logs to a separate, unlinked trace rather than nesting under `answer_followup`'s span. | Re-check cloud.langfuse.com's UI directly (not just the API) once this is deployed somewhere with browser access — the data may be visible there even if the v2 observations API doesn't surface it; if not, this is an open question for Langfuse support, not this project |
 
 ## Latency and cost per question
 

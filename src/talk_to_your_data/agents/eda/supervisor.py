@@ -13,11 +13,13 @@ import os
 from contextlib import AbstractAsyncContextManager
 
 import anthropic
+from langfuse import observe
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from talk_to_your_data.checkpointer import compiled_graph_async
+from talk_to_your_data.tracing import record_generation
 
 from .analysis_agent import analyze
 from .findings_store import save_finding
@@ -64,6 +66,7 @@ def _client() -> anthropic.Anthropic:
     )
 
 
+@observe(name="supervisor_route", as_type="generation")
 def _route(state: AgentState) -> dict:
     client = _client()
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
@@ -81,6 +84,7 @@ def _route(state: AgentState) -> dict:
         tools=[ROUTE_TOOL],
         messages=[{"role": "user", "content": prompt}],
     )
+    record_generation(response)
     tool_use = next((b for b in response.content if b.type == "tool_use"), None)
     if tool_use is None:
         raise RuntimeError("supervisor: model did not call route")

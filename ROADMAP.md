@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 6a (Guardrails) complete. Phase 6b (Langfuse tracing) not started.**
+**Current status: Phase 6b (Langfuse tracing) complete. Phase 6c (Slackbot) not started.**
 
 ---
 
@@ -505,9 +505,87 @@ bugs):**
 
 ---
 
-- [ ] Every LLM call site wrapped for tracing (`propose_fixes`, `run_sql_agent`,
-      `classify_lens`/`analyze`, `write_finding`, `_route`, `answer_followup`) —
-      each is already a narrow, named function specifically so this is mechanical
+### Phase 6b — Langfuse tracing ✅
+
+- [x] Every LLM call site wrapped for tracing (`propose_fixes`, `run_sql_agent`,
+      `classify_lens`/`analyze`, `write_finding`, `_route`, `check_scope`,
+      `answer_followup`) — each is already a narrow, named function specifically so
+      this is mechanical
+- [x] Real model/usage/cost attached to each generation span, not just a named span
+- [x] `run_sql_agent`'s per-turn tool-use loop gets its own nested generation span
+      per turn, plus a `tool`-typed span per MCP tool call
+
+#### Phase 6b summary
+
+**Built:** `tracing.py`'s `record_generation()` — reads `model`/`usage.input_tokens`/
+`usage.output_tokens` off a real `anthropic.types.Message` and forwards them (plus a
+computed cost, from a small hardcoded USD-per-token table, since Foundry's model
+names aren't guaranteed to resolve against Langfuse's own price registry) onto the
+current span via `update_current_generation()`. Every direct Anthropic call site is
+decorated with `@observe(as_type="generation")` and calls it right after
+`client.messages.create(...)`; `run_sql_agent`'s bounded tool-use loop additionally
+opens one nested `start_as_current_observation(as_type="generation")` per turn and
+one `as_type="tool"` span per MCP tool call, so a single question's full LLM+tool
+trace is visible, not just one top-level span. `answer_followup` (PandasAI) is the
+one call site with no raw `Message` to read usage off — covered instead by
+LiteLLM's own native Langfuse callback (`litellm.success_callback = ["langfuse"]`),
+confirmed to be a recognized callback string in the installed `litellm` version by
+reading its source, not assumed, and smoke-tested against the real Foundry endpoint
+before relying on it. `pyproject.toml`'s `langfuse` constraint bumped `>=2.50` →
+`>=4.0` (stale from before Phase 6 was planned; the v4 OTel-based SDK is what's
+actually used throughout). 4 new tests, bringing the project total to 167
+(91 unit / 56 integration / 20 llm): 3 unit tests pin `record_generation`'s cost
+math exactly (a priced model, a differently-priced model, an unpriced model falling
+back to `cost_details=None`) against a stub response; 1 `llm`-marked test feeds it a
+*real* Anthropic response (not the stub) to catch any shape mismatch the stub
+wouldn't.
+
+**Verified, not just unit-tested:** tested `opentelemetry-instrumentation-anthropic`
+(Langfuse's own recommended auto-instrumentation path) for real against the Foundry
+endpoint before deciding against it — it produces correctly-typed, correctly-nested
+spans, but left model/usage/cost/input/output all unpopulated in default config;
+confirmed the explicit approach's spans carry the right underlying OTel attributes
+(`langfuse.observation.model.name`, `langfuse.observation.usage_details`) by
+inspecting a raw span locally; then separately polled this project's actual Langfuse
+Cloud org (`client.api.observations.get_many`, the v2 endpoint Langfuse's own
+deprecation notice says is the live one) for 60+ seconds after a real traced call
+and found `model`/`usage_details`/`cost_details` still `None` on query-back — a
+real, reproducible backend-side gap (documented in `docs/architecture.md`'s
+failure-modes table), not a timing fluke and not something fixable from this
+project's side; ran the full non-`llm` suite with real Langfuse credentials loaded
+to confirm `update_current_generation()` calls don't block on network I/O in tests
+that use a stubbed Anthropic client (10.5s either way — no regression); re-ran all 6
+of Phase 4's golden questions against the real model with the new tracing wired
+through `sql_agent`/`analysis_agent`/`narrative_agent`/`supervisor` simultaneously,
+confirming the extra spans don't change routing or answers.
+
+**Key decisions, trade-offs, and a bug caught before it shipped:**
+- *A regression I introduced and fixed in the same session*: `record_generation`
+  unconditionally reads `response.usage.input_tokens` — broke 5 existing unit tests
+  in `test_llm_propose_fixes.py`/`test_scope_guard.py` whose stub `_StubResponse`
+  only implemented `.content`, predating tracing. Fixed by giving the stubs a
+  `.usage`/`.model` that actually mirror the real `anthropic.types.Message` shape
+  (the more correct fix, since real responses always have these — not by making
+  `record_generation` defensive against a case that can't happen in production).
+- *Explicit instrumentation, not the auto-instrumentor* — this project has a small,
+  fixed number of Anthropic call sites, all already behind named wrapper functions;
+  explicit is both necessary (auto-instrumentation didn't populate the data) and
+  sufficient (no other call sites exist to miss), so running both and getting
+  duplicate, emptier spans for the same call wasn't worth it.
+- *A hardcoded USD-per-token table, not Langfuse's model-price registry* — Foundry
+  serves `claude-opus-5-5`/`claude-sonnet-5-5` under names that aren't guaranteed to
+  resolve against whatever provider/model strings Langfuse has on file for
+  cost auto-calculation; computing cost ourselves from the same pricing already
+  documented in `docs/architecture.md`'s latency/cost table avoids depending on that
+  resolution succeeding.
+- *`answer_followup`'s LiteLLM-logged generation lands as its own, unlinked trace*,
+  not nested under `answer_followup`'s `@observe` span — linking them would mean
+  reconfiguring PandasAI's global LLM singleton with the current trace/observation
+  id on every call, for a follow-up path that already carries Phase 6a's documented
+  best-effort posture elsewhere. Accepted, not solved, and written down rather than
+  left for someone to discover by noticing a disconnected trace later.
+
+---
 
 ### Phase 6c — Slackbot
 

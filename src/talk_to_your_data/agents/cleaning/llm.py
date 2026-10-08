@@ -16,6 +16,9 @@ import os
 from typing import Any
 
 import anthropic
+from langfuse import observe
+
+from talk_to_your_data.tracing import record_generation
 
 from .state import FixProposal, FixStrategy, ProfileFinding
 
@@ -79,6 +82,7 @@ def _build_prompt(findings: list[ProfileFinding]) -> str:
     )
 
 
+@observe(name="propose_fixes", as_type="generation")
 def propose_fixes(
     findings: list[ProfileFinding],
     *,
@@ -96,6 +100,7 @@ def propose_fixes(
         tools=[PROPOSE_FIXES_TOOL],
         messages=[{"role": "user", "content": _build_prompt(findings)}],
     )
+    record_generation(response)
     tool_use = next((block for block in response.content if block.type == "tool_use"), None)
     if tool_use is None:
         raise RuntimeError(

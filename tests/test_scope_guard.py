@@ -15,9 +15,17 @@ class _StubToolUseBlock:
         self.input = input_
 
 
+class _StubUsage:
+    def __init__(self, input_tokens: int = 10, output_tokens: int = 10):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
 class _StubResponse:
-    def __init__(self, content: list):
+    def __init__(self, content: list, model: str = "claude-opus-5-5"):
         self.content = content
+        self.model = model
+        self.usage = _StubUsage()
 
 
 class _StubMessages:
