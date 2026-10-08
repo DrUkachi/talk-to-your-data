@@ -58,6 +58,7 @@ especially trade-offs that affect answer quality or evaluability.
 │   └── _shared.py                # filename <-> table-name mapping used by fetch/load
 ├── src/talk_to_your_data/
 │   ├── db.py                     # app_engine() / readonly_engine() factories
+│   ├── checkpointer.py           # shared Postgres checkpointer (sync + async) for every graph
 │   ├── semantic_layer/
 │   │   ├── models.py             # 5 models: joins, grain, dimensions (code, reviewed)
 │   │   ├── schema.py             # pydantic schema for metrics.yaml
@@ -67,14 +68,24 @@ especially trade-offs that affect answer quality or evaluability.
 │   ├── mcp_server/
 │   │   └── server.py             # FastMCP: list_metrics, describe_metric, query_metric, run_sql
 │   ├── agents/
-│   │   └── cleaning/             # profile -> propose -> approve -> apply -> validate (Phase 3)
-│   │       ├── state.py          # CleaningState, FixStrategy, ProfileFinding, FixProposal
-│   │       ├── profiling.py      # deterministic checks (TABLE_CHECKS registry, no LLM)
-│   │       ├── fix_strategies.py # strategy -> SQL, deterministic; apply_fixes (transactional)
-│   │       ├── llm.py            # propose_fixes: the only LLM call in this agent
-│   │       ├── graph.py          # the LangGraph StateGraph + Postgres checkpointer wiring
-│   │       └── api.py            # FastAPI: POST /cleaning-runs, GET .../{id}, POST .../approve
-│   │                             # supervisor + SQL/analysis/narrative agents land here (Phase 4)
+│   │   ├── cleaning/             # profile -> propose -> approve -> apply -> validate (Phase 3)
+│   │   │   ├── state.py          # CleaningState, FixStrategy, ProfileFinding, FixProposal
+│   │   │   ├── profiling.py      # deterministic checks (TABLE_CHECKS registry, no LLM)
+│   │   │   ├── fix_strategies.py # strategy -> SQL, deterministic; apply_fixes (transactional)
+│   │   │   ├── llm.py            # propose_fixes: the only LLM call in this agent
+│   │   │   ├── graph.py          # the LangGraph StateGraph wiring
+│   │   │   └── api.py            # FastAPI: POST /cleaning-runs, GET .../{id}, POST .../approve
+│   │   └── eda/                  # supervisor + sql/analysis/narrative agents (Phase 4)
+│   │       ├── state.py          # AgentState, Finding, SqlResult, AnalysisResult
+│   │       ├── mcp_tools.py      # MCP tool schema -> Anthropic ToolParam adapter
+│   │       ├── sql_agent.py      # bounded tool-use loop against the MCP server
+│   │       ├── analysis_agent.py # lens classification (LLM) + stats computation (code)
+│   │       ├── narrative_agent.py # writes the Finding's prose fields
+│   │       ├── supervisor.py     # the routing graph (every worker reports back to it)
+│   │       ├── findings_store.py # durable findings table, independent of the checkpointer
+│   │       ├── ask.py            # ask_question(): protocol-agnostic entry point
+│   │       ├── a2a_executor.py   # A2A AgentExecutor adapter over ask_question()
+│   │       └── api.py            # FastAPI: POST /ask, + A2A agent card/JSON-RPC routes
 │   ├── slackbot/                 # Slack Bolt app, Socket Mode (Phase 6)
 │   └── eval/                     # golden set + scorers, run from CI (Phase 6)
 ├── tests/                        # mirrors src/ layout
@@ -88,6 +99,16 @@ especially trade-offs that affect answer quality or evaluability.
 - Lint/format: `ruff`. Type-check: `mypy` against `src/`.
 - Tests: `pytest`, under `tests/`, mirroring the `src/` package layout. Unit tests for
   node/compiler logic in isolation, not just end-to-end graph runs.
+- Three pytest markers, each a **separate** runtime dependency —
+  `uv run pytest` (default) excludes both `integration` and `llm`:
+  - `integration`: needs Docker Postgres running with data loaded.
+  - `llm`: calls the real Anthropic/Foundry API (costs tokens); some of these also
+    need the MCP server running (`uv run python -m talk_to_your_data.mcp_server.server`).
+  - A test needing real credentials gets **only** `llm`, not also `integration` —
+    even if it happens to touch Postgres too. Dual-marking them doesn't add
+    precision, it just means a plain `-m integration` run unexpectedly sweeps in
+    costly real-model calls. Found this the hard way when a parametrized
+    golden-question suite got swept into an `-m integration` run and hung.
 - SQL style: defined by the `sql-conventions` skill (Phase 1) — use it when writing or
   reviewing queries rather than improvising a style.
 - **Q&A agents** (Phase 4's supervisor/SQL/analysis/narrative agents, the Phase 6

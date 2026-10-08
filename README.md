@@ -26,21 +26,28 @@ docker compose --env-file .env -f docker/docker-compose.yml up -d
 uv run python scripts/load_data.py
 uv run python scripts/setup_db_roles.py   # creates the least-privilege olist_readonly role
 
-uv run pytest                  # fast, no DB required
+uv run pytest                  # fast, no DB or LLM required
 uv run pytest -m integration    # requires the steps above to have run
+uv run pytest -m llm            # calls the real model; needs credentials (+ MCP server for some)
 
-# MCP server (semantic layer + read-only SQL tool), served over HTTP
-uv run python -m talk_to_your_data.mcp_server.server
+# `docker compose up -d` above also started mcp-server, cleaning-api, and eda-api.
 
-# Cleaning agent API (`docker compose up -d` above already started this too)
+# Cleaning agent API
 curl -X POST localhost:8001/cleaning-runs -H 'content-type: application/json' \
   -d '{"table": "orders"}'
 # -> {"run_id": "...", "status": "awaiting_approval" | "done", "proposals": [...], ...}
 # If awaiting_approval, review `proposals` then:
 curl -X POST localhost:8001/cleaning-runs/<run_id>/approve -H 'content-type: application/json' \
   -d '{"approved_finding_ids": ["..."]}'
+
+# EDA supervisor agent: ask a business question in plain English
+curl -X POST localhost:8002/ask -H 'content-type: application/json' \
+  -d '{"question": "How did monthly revenue trend in 2017?"}'
+# Also reachable over A2A (agent card at /.well-known/agent-card.json, JSON-RPC at /a2a)
+# for external agent-to-agent callers.
 ```
 
-Proposing fixes calls the LLM (`ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` in `.env`) -- without
-real credentials, runs against tables with no findings still work end-to-end (they finish
-immediately with `status: done`), but a run with findings will fail at the propose step.
+Proposing fixes and asking questions both call the LLM (`ANTHROPIC_API_KEY`/
+`ANTHROPIC_BASE_URL` in `.env`) -- without real credentials, cleaning runs against tables
+with no findings still work end-to-end (`status: done` immediately), but anything that
+needs the model (a cleaning run with findings, any EDA question) will fail at that step.

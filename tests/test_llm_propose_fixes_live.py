@@ -19,7 +19,8 @@ from talk_to_your_data.agents.cleaning import fix_strategies, llm, profiling
 from talk_to_your_data.db import app_engine
 
 pytestmark = [
-    pytest.mark.integration,
+    # llm only, deliberately not also `integration` -- so a plain `-m integration`
+    # run doesn't sweep in real, costly LLM calls; use `-m llm` explicitly for this.
     pytest.mark.llm,
     pytest.mark.skipif(
         not os.environ.get("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY configured"

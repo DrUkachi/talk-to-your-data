@@ -7,24 +7,21 @@ fresh connection per call is exactly what proves resume works off Postgres state
 not an in-memory object a long-lived process happens to still have around.
 """
 
-import os
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 
-from dotenv import load_dotenv
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from sqlalchemy import text
 
-from talk_to_your_data.db import REPO_ROOT, app_engine
+from talk_to_your_data.checkpointer import compiled_graph
+from talk_to_your_data.db import app_engine
 
 from . import fix_strategies, llm, profiling
 from .state import CleaningState, FixProposal, ProfileFinding, ValidationResult
 
 CLEAN_SCHEMA = "clean"
-CHECKPOINT_SCHEMA = "langgraph"
 DEFAULT_MAX_ATTEMPTS = 3
 
 
@@ -156,19 +153,5 @@ def build_graph(checkpointer: PostgresSaver) -> CompiledStateGraph:
     return g.compile(checkpointer=checkpointer)
 
 
-def checkpointer_conn_string() -> str:
-    load_dotenv(REPO_ROOT / ".env")
-    base = (
-        f"postgresql://{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}"
-        f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}/{os.environ['POSTGRES_DB']}"
-    )
-    return f"{base}?options=-c%20search_path%3D{CHECKPOINT_SCHEMA}"
-
-
-@contextmanager
-def cleaning_graph() -> Iterator[CompiledStateGraph]:
-    with app_engine().begin() as conn:
-        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {CHECKPOINT_SCHEMA}"))
-    with PostgresSaver.from_conn_string(checkpointer_conn_string()) as saver:
-        saver.setup()
-        yield build_graph(saver)
+def cleaning_graph() -> AbstractContextManager[CompiledStateGraph]:
+    return compiled_graph(build_graph)
