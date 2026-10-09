@@ -76,7 +76,8 @@ def score_execution_accuracy(
 def score_faithfulness(finding: Finding, result_rows: list[dict[str, Any]]) -> tuple[bool, str]:
     """Best-effort, not a proof: checks every number mentioned in the narrative
     traces back to a stored row value, or a simple derivation (sum, % share of
-    the total) -- the same honesty standard as Phase 6a's masking limitation.
+    the total, pairwise sum/difference/ratio of stored values) -- the same honesty
+    standard as Phase 6a's masking limitation.
     Verifying arbitrary derived-number provenance in free text is a hard, open
     problem; this catches fabricated/unrelated figures, not every possible gap.
     """
@@ -99,6 +100,15 @@ def score_faithfulness(finding: Finding, result_rows: list[dict[str, Any]]) -> t
     # thousands/millions shorthand ("549.4K", "13.2M").
     for v in row_values:
         derived.update({v * 100.0, v / 1_000.0, v / 1_000_000.0})
+    # Simple derivations across two stored values (an average from sum / count, a
+    # "non-delivered" count from total - delivered, a combined total, a percentage).
+    if len(row_values) <= 8:
+        for a in row_values:
+            for b in row_values:
+                if a is not b:
+                    derived.update({a + b, a - b, abs(a - b)})
+                    if b:
+                        derived.update({a / b, 100.0 * a / b})
 
     unexplained = [
         n

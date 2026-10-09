@@ -72,7 +72,9 @@ def write_finding(
     prompt = (
         "Write up this data analysis as a finding. Every number in your "
         "interpretation must trace back to the result or analysis below -- if it "
-        "doesn't, it doesn't belong. You must call write_finding to respond.\n\n"
+        "doesn't, it doesn't belong. Be concise: result_summary and interpretation at "
+        "most two sentences each, caveats one sentence. You must call write_finding "
+        "to respond.\n\n"
         f"Question: {question}\n"
         f"Result columns: {sql_result.columns}\n"
         f"Result rows: {json.dumps(sql_result.rows, default=str)}\n"

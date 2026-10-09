@@ -722,6 +722,9 @@ refusal correctness 100%, p50 latency 19.2s over 5 serial questions.
   calls run via `asyncio.to_thread`.
 - MCP serializes Decimals as strings; the scorer now parses them.
 
+**Latency pass (after 6d):** p50 17-19s -> 6.1s with accuracy/faithfulness/refusal
+still 100% (see CLAUDE.md's "Latency design" bullet for what changed).
+
 **Deviations:** latency is measured on a serial probe (concurrent latency measures
 queueing, not the single-user target). Provider moved Claude -> GPT-6.1-Sol mid-phase
 (see `src/talk_to_your_data/llm.py`).

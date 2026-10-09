@@ -67,7 +67,7 @@ def _kind_hint(question: str) -> str | None:
     return None
 
 
-def _to_float(value: Any) -> float | None:
+def to_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int | float):
@@ -80,14 +80,14 @@ def _to_float(value: Any) -> float | None:
     return None
 
 
-def _classify(columns: list[str], rows: list[dict[str, Any]]) -> dict[str, str]:
+def classify_columns(columns: list[str], rows: list[dict[str, Any]]) -> dict[str, str]:
     kinds: dict[str, str] = {}
     for col in columns:
         values = [r.get(col) for r in rows if r.get(col) is not None]
         if not values:
             kinds[col] = "other"
             continue
-        numeric = all(_to_float(v) is not None for v in values)
+        numeric = all(to_float(v) is not None for v in values)
         datelike = all(
             isinstance(v, datetime) or (isinstance(v, str) and _DATE_VALUE_RE.match(v))
             for v in values
@@ -104,7 +104,7 @@ def _classify(columns: list[str], rows: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _is_year_like(values: list[Any]) -> bool:
-    return all(1900 <= (_to_float(v) or 0) <= 2200 for v in values)
+    return all(1900 <= (to_float(v) or 0) <= 2200 for v in values)
 
 
 def _short_label(value: Any) -> str:
@@ -122,7 +122,7 @@ def _plan(question: str, result: SqlResult) -> tuple[str, dict[str, Any]] | tupl
     if len(rows) < 2:
         return None, "the result is a single value, so there is nothing to plot"
 
-    kinds = _classify(columns, rows)
+    kinds = classify_columns(columns, rows)
     temporal = [c for c in columns if kinds[c] == "temporal"]
     category = [c for c in columns if kinds[c] == "category"]
     numeric = [c for c in columns if kinds[c] == "numeric"]
@@ -158,7 +158,7 @@ def _render(kind: str, spec: dict[str, Any], result: SqlResult, title: str, out:
     fig, ax = plt.subplots(figsize=(8, 4.5))
     try:
         if kind == "scatter":
-            raw = [(_to_float(r[x_col]), _to_float(r[y_cols[0]])) for r in result.rows]
+            raw = [(to_float(r[x_col]), to_float(r[y_cols[0]])) for r in result.rows]
             pts = [(a, b) for a, b in raw if a is not None and b is not None]
             ax.scatter([a for a, _ in pts], [b for _, b in pts])
             ax.set_xlabel(_pretty(x_col))
@@ -166,9 +166,7 @@ def _render(kind: str, spec: dict[str, Any], result: SqlResult, title: str, out:
         elif kind == "line":
             labels = [_short_label(x) for x in xs]
             for y in y_cols:
-                ax.plot(
-                    labels, [_to_float(r[y]) for r in result.rows], marker="o", label=_pretty(y)
-                )
+                ax.plot(labels, [to_float(r[y]) for r in result.rows], marker="o", label=_pretty(y))
             ax.set_xlabel(_pretty(x_col))
             if len(y_cols) > 1:
                 ax.legend()
@@ -180,7 +178,7 @@ def _render(kind: str, spec: dict[str, Any], result: SqlResult, title: str, out:
             ax.set_xticklabels(labels[::step], rotation=45, ha="right")
         else:  # bar / pie: one category column, one numeric column, largest first
             y = y_cols[0]
-            pairs = [(str(r[x_col]), _to_float(r[y]) or 0.0) for r in result.rows]
+            pairs = [(str(r[x_col]), to_float(r[y]) or 0.0) for r in result.rows]
             pairs.sort(key=lambda p: p[1], reverse=True)
             limit = MAX_PIE_SLICES if kind == "pie" else MAX_BARS
             shown = pairs[:limit]
@@ -215,7 +213,8 @@ def _restrict_to_window(result: SqlResult, window: tuple[str, str] | None) -> Sq
     if window is None:
         return result
     temporal = next(
-        (c for c, k in _classify(result.columns, result.rows).items() if k == "temporal"), None
+        (c for c, k in classify_columns(result.columns, result.rows).items() if k == "temporal"),
+        None,
     )
     if temporal is None:
         return result

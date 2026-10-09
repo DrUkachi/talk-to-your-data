@@ -1,32 +1,18 @@
 """The supervisor graph: every worker reports back to the supervisor, which decides
-the next step -- not a fixed SQL -> analysis -> narrative pipeline. Only one of its
-three decisions is genuinely non-trivial (whether this question needs analysis_agent
-at all, e.g. a trend/breakdown question does, a simple point-value lookup doesn't);
-the other two (must start with sql_agent, must end with narrative_agent before
-FINISH) are hard constraints stated in the prompt. Kept uniform anyway -- every
-worker returns to the supervisor, including the trivial cases -- because that's
-what makes this a genuine supervisor topology rather than Python if/else wearing
-an LLM costume for the one real decision.
+the next step. Routing is deterministic code (see `_route`): the LLM router that used
+to live here only ever applied hard rules, and each hop cost a ~2s model call. The
+topology is unchanged -- every worker still returns to the supervisor -- so adding a
+step that genuinely needs judgment later just means making `_route` smarter.
 """
 
 import asyncio
 from contextlib import AbstractAsyncContextManager
 
-from langfuse import observe
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from talk_to_your_data.checkpointer import compiled_graph_async
-from talk_to_your_data.llm import (
-    ToolSpec,
-    first_tool_call,
-    get_client,
-    get_model,
-    reasoning_config,
-    to_openai_tool,
-)
-from talk_to_your_data.tracing import record_generation
 
 from .analysis_agent import analyze
 from .charting import build_chart
@@ -37,67 +23,25 @@ from .state import AgentState, AnalysisResult, SqlResult
 
 MAX_TURNS = 8
 
-ROUTE_TOOL: ToolSpec = {
-    "name": "route",
-    "description": "Decide which agent handles the next step of answering this question.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "next": {
-                "type": "string",
-                "enum": ["sql_agent", "analysis_agent", "narrative_agent", "FINISH"],
-            },
-            "reasoning": {"type": "string"},
-        },
-        "required": ["next", "reasoning"],
-    },
-}
 
-ROUTING_RULES = (
-    "Hard rules, not judgment calls:\n"
-    "- No sql_result yet -> next MUST be sql_agent.\n"
-    "- A finding already exists -> next MUST be FINISH.\n"
-    "- sql_result exists but no finding yet, and analysis wasn't just skipped by you "
-    "-> next MUST be narrative_agent, UNLESS this question genuinely needs analysis "
-    "first (see below).\n\n"
-    "The one real judgment call: once sql_result exists and there's no analysis_result "
-    "yet, decide whether analysis_agent adds anything. Use it for trend-over-time, "
-    "period comparison, or category-breakdown questions. Skip it (go straight to "
-    "narrative_agent) for a simple single-value lookup -- analysis would add nothing."
-)
-
-
-@observe(name="supervisor_route", as_type="generation")
 def _route(state: AgentState) -> dict:
-    client = get_client()
-    model = get_model()
-    prompt = (
-        f"{ROUTING_RULES}\n\n"
-        f"Question: {state['question']}\n"
-        f"Has sql_result: {state.get('sql_result') is not None}\n"
-        f"Has analysis_result: {state.get('analysis_result') is not None}\n"
-        f"Has finding: {state.get('finding') is not None}\n"
-        "You must call route to respond."
-    )
-    response = client.responses.create(
-        model=model,
-        max_output_tokens=8192,
-        reasoning=reasoning_config(),
-        tools=[to_openai_tool(ROUTE_TOOL)],
-        input=[{"role": "user", "content": prompt}],
-    )
-    record_generation(response)
-    tool_use = first_tool_call(response)
-    if tool_use is None:
-        raise RuntimeError("supervisor: model did not call route")
-    return dict(tool_use.arguments)
+    """Deterministic routing -- no LLM. The old LLM router only ever applied these hard
+    rules (plus one "skip analysis for single values" call that analysis_agent now
+    makes itself via lens "none"), and cost 3-4 sequential calls (5-10s) per question."""
+    if state.get("finding") is not None:
+        return {"next": "FINISH", "reasoning": "finding exists"}
+    if state.get("sql_result") is None:
+        return {"next": "sql_agent", "reasoning": "no sql_result yet"}
+    if state.get("analysis_result") is None:
+        return {"next": "analysis_agent", "reasoning": "sql_result needs analysis"}
+    return {"next": "narrative_agent", "reasoning": "write the finding"}
 
 
 async def supervisor_node(state: AgentState) -> dict:
     turn = state.get("turn", 0) + 1
     if turn > state.get("max_turns", MAX_TURNS):
         return {"next": "FINISH", "turn": turn, "status": "failed"}
-    decision = await asyncio.to_thread(_route, state)
+    decision = _route(state)
     update: dict = {"next": decision["next"], "turn": turn}
     # Only set "routing" while there's still work ahead -- otherwise this
     # overwrites narrative_agent's "done" on the final pass back through here.

@@ -102,7 +102,33 @@ async def _post_finding(client: Any, channel: str, thread_ts: str, finding: Find
             )
 
 
+ACK_TEXT = ":hourglass_flowing_sand: On it -- this usually takes 10-20 seconds."
+
+
+async def _post_ack(client: Any, channel: str, thread_ts: str) -> str | None:
+    """Immediate acknowledgement so the thread isn't silent while the pipeline runs.
+    Best-effort: a failure here must never block the actual answer."""
+    try:
+        response = await client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=ACK_TEXT
+        )
+        return response["ts"]
+    except Exception:
+        logger.exception("failed to post acknowledgement")
+        return None
+
+
+async def _clear_ack(client: Any, channel: str, ack_ts: str | None) -> None:
+    if ack_ts is None:
+        return
+    try:
+        await client.chat_delete(channel=channel, ts=ack_ts)
+    except Exception:
+        logger.debug("could not delete acknowledgement %s", ack_ts, exc_info=True)
+
+
 async def _answer_new_question(client: Any, channel: str, thread_ts: str, question: str) -> None:
+    ack_ts = await _post_ack(client, channel, thread_ts)
     try:
         finding = await ask_question(question, thread_id=thread_ts)
     except Exception as e:  # noqa: BLE001 -- surfaced to the user, not swallowed;
@@ -110,21 +136,26 @@ async def _answer_new_question(client: Any, channel: str, thread_ts: str, questi
         await client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=f"Couldn't answer that: {e}"
         )
+        await _clear_ack(client, channel, ack_ts)
         return
     await _post_finding(client, channel, thread_ts, finding)
+    await _clear_ack(client, channel, ack_ts)
 
 
 async def _answer_followup(
     client: Any, channel: str, thread_ts: str, finding_id: str, question: str
 ) -> None:
+    ack_ts = await _post_ack(client, channel, thread_ts)
     try:
         finding = await answer_followup(finding_id, question)
     except Exception as e:  # noqa: BLE001
         await client.chat_postMessage(
             channel=channel, thread_ts=thread_ts, text=f"Couldn't answer that: {e}"
         )
+        await _clear_ack(client, channel, ack_ts)
         return
     await _post_finding(client, channel, thread_ts, finding)
+    await _clear_ack(client, channel, ack_ts)
 
 
 async def handle_message(event: dict[str, Any], context: Any, client: Any) -> None:
