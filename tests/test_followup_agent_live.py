@@ -21,9 +21,7 @@ pytestmark = [
     # llm only, deliberately not also `integration` -- see CLAUDE.md's note on why
     # dual-marking sweeps costly real-model calls into a plain `-m integration` run.
     pytest.mark.llm,
-    pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY configured"
-    ),
+    pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="no OPENAI_API_KEY configured"),
 ]
 
 

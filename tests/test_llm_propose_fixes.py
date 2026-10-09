@@ -1,43 +1,11 @@
-"""Unit tests for the tool-use plumbing, using a stub Anthropic client -- no real
+"""Unit tests for the tool-use plumbing, using a stub Responses-API client -- no real
 credentials or network call. See test_cleaning_graph_integration.py for how the
 graph-level tests stub this at a higher level for the same reason.
 """
 
 from talk_to_your_data.agents.cleaning import llm
 from talk_to_your_data.agents.cleaning.state import FixStrategy, ProfileFinding
-
-
-class _StubToolUseBlock:
-    type = "tool_use"
-
-    def __init__(self, input_: dict):
-        self.input = input_
-
-
-class _StubUsage:
-    def __init__(self, input_tokens: int = 10, output_tokens: int = 10):
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
-
-
-class _StubResponse:
-    def __init__(self, content: list, model: str = "claude-opus-5-5"):
-        self.content = content
-        self.model = model
-        self.usage = _StubUsage()
-
-
-class _StubMessages:
-    def __init__(self, response: _StubResponse):
-        self._response = response
-
-    def create(self, **kwargs):
-        return self._response
-
-
-class _StubClient:
-    def __init__(self, response: _StubResponse):
-        self.messages = _StubMessages(response)
+from tests.llm_stubs import StubClient, StubResponse, StubToolUseBlock
 
 
 def _finding() -> ProfileFinding:
@@ -53,9 +21,9 @@ def _finding() -> ProfileFinding:
 
 
 def test_propose_fixes_parses_tool_use_response_into_fix_proposals():
-    response = _StubResponse(
+    response = StubResponse(
         content=[
-            _StubToolUseBlock(
+            StubToolUseBlock(
                 {
                     "proposals": [
                         {
@@ -71,7 +39,7 @@ def test_propose_fixes_parses_tool_use_response_into_fix_proposals():
         ]
     )
 
-    proposals = llm.propose_fixes([_finding()], client=_StubClient(response))
+    proposals = llm.propose_fixes([_finding()], client=StubClient(response))
 
     assert len(proposals) == 1
     assert proposals[0].finding_id == "orders-range-price-0"
@@ -81,9 +49,9 @@ def test_propose_fixes_parses_tool_use_response_into_fix_proposals():
 
 
 def test_propose_fixes_handles_multiple_proposals_and_skipped_findings():
-    response = _StubResponse(
+    response = StubResponse(
         content=[
-            _StubToolUseBlock(
+            StubToolUseBlock(
                 {
                     "proposals": [
                         {
@@ -99,9 +67,9 @@ def test_propose_fixes_handles_multiple_proposals_and_skipped_findings():
         ]
     )
 
-    proposals = llm.propose_fixes([_finding(), _finding()], client=_StubClient(response))
+    proposals = llm.propose_fixes([_finding(), _finding()], client=StubClient(response))
     assert len(proposals) == 1  # the LLM is allowed to propose fewer fixes than findings
 
 
 def test_propose_fixes_returns_empty_list_without_calling_the_client_for_no_findings():
-    assert llm.propose_fixes([], client=_StubClient(_StubResponse(content=[]))) == []
+    assert llm.propose_fixes([], client=StubClient(StubResponse(content=[]))) == []

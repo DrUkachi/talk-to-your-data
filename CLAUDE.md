@@ -31,7 +31,7 @@ especially trade-offs that affect answer quality or evaluability.
   trade-offs, and update ROADMAP.md (check off tasks, note deviations from plan).
 - **Secrets:** never hardcode credentials. Everything comes from environment
   variables; `.env` is gitignored, `.env.example` documents the names. LLM calls go
-  through the Anthropic SDK configured for Microsoft Foundry — base URL and key come
+  through the OpenAI SDK (`talk_to_your_data/llm.py`) configured for Microsoft Foundry, main model GPT-6.1-Sol — base URL and key come
   from env, nothing provider-specific hardcoded into business logic.
 - **Token/context discipline:** read only the files you need; don't re-read large data
   files (CSVs in `data/`, query result dumps) — summarize or sample instead.
@@ -60,7 +60,7 @@ especially trade-offs that affect answer quality or evaluability.
 │   ├── db.py                     # app_engine() / readonly_engine() factories
 │   ├── checkpointer.py           # shared Postgres checkpointer (sync + async) for every graph
 │   ├── tracing.py                # record_generation(): attaches real model/usage/cost to the
-│   │                              # current Langfuse span after a client.messages.create() call (Phase 6b)
+│   │                              # current Langfuse span after a client.responses.create() call (Phase 6b)
 │   ├── guardrails/                # cross-cutting, not nested under one agent (Phase 6a)
 │   │   ├── sql_guard.py           # sqlglot parse/validate, row-limit policy, output masking
 │   │   └── scope_guard.py        # out-of-scope classifier, gates ask_question() before the graph
@@ -82,7 +82,7 @@ especially trade-offs that affect answer quality or evaluability.
 │   │   │   └── api.py            # FastAPI: POST /cleaning-runs, GET .../{id}, POST .../approve
 │   │   └── eda/                  # supervisor + sql/analysis/narrative agents (Phase 4)
 │   │       ├── state.py          # AgentState, Finding, SqlResult, AnalysisResult
-│   │       ├── mcp_tools.py      # MCP tool schema -> Anthropic ToolParam adapter
+│   │       ├── mcp_tools.py      # MCP tool schema -> OpenAI tool adapter
 │   │       ├── sql_agent.py      # bounded tool-use loop against the MCP server
 │   │       ├── analysis_agent.py # lens classification (LLM) + stats computation (code)
 │   │       ├── narrative_agent.py # writes the Finding's prose fields
@@ -110,7 +110,7 @@ especially trade-offs that affect answer quality or evaluability.
 - Three pytest markers, each a **separate** runtime dependency —
   `uv run pytest` (default) excludes both `integration` and `llm`:
   - `integration`: needs Docker Postgres running with data loaded.
-  - `llm`: calls the real Anthropic/Foundry API (costs tokens); some of these also
+  - `llm`: calls the real GPT-6.1-Sol/Foundry API (costs tokens); some of these also
     need the MCP server running (`uv run python -m talk_to_your_data.mcp_server.server`).
   - A test needing real credentials gets **only** `llm`, not also `integration` —
     even if it happens to touch Postgres too. Dual-marking them doesn't add
@@ -134,17 +134,22 @@ especially trade-offs that affect answer quality or evaluability.
   pattern repeats across the semantic layer (Phase 2) and the cleaning agent
   (Phase 3) on purpose — it's what keeps agent-writable paths auditable without
   having to validate arbitrary LLM-generated SQL.
-- **The `aie-academy-hub` Foundry deployment rejects forced `tool_choice`**
-  (`{"type": "tool", ...}` / `"any"`) with a 400 — confirmed against both
-  `claude-opus-5-5` and `claude-sonnet-5`, not assumed. Every tool-use call site
+- **All LLM access goes through `src/talk_to_your_data/llm.py`** (client, model
+  name, `ToolSpec` -> OpenAI tool conversion, tool-call parsing). Env:
+  `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`OPENAI_MODEL` (default `gpt-6.1-sol`), shared
+  with Codex CLI (`docs/codex.md`). The project moved from Claude to GPT-6.1-Sol.
+- **The `aie-academy-hub` Foundry deployment rejected forced `tool_choice`**
+  (`{"type": "tool", ...}` / `"any"`) with a 400 — confirmed against the earlier
+  Claude deployments, NOT yet re-tested on GPT-6.1-Sol. GPT-6.1-Sol itself *requires* the Responses API
+  for function tools (Chat Completions 400s unless reasoning_effort=none). Every tool-use call site
   (Phase 3's `propose_fixes`, Phase 4's planned supervisor/sql/analysis agents) uses
   the default `"auto"` tool_choice plus an explicit "you must call the tool" prompt
-  instruction, and checks for a `tool_use` block in the response rather than relying
+  instruction, and checks for a tool call in the response rather than relying
   on the API to guarantee one.
-- **PandasAI (Phase 5) goes through `pandasai-litellm`, not a direct Anthropic
-  integration** — no official `pandasai-anthropic` package exists; confirmed by
-  checking PyPI, not assumed. `LiteLLM(model="anthropic/<model>", api_key=...,
-  api_base=ANTHROPIC_BASE_URL)` routes correctly to the Foundry deployment.
+- **PandasAI (Phase 5) goes through `pandasai-litellm`.**
+  `LiteLLM(model="openai/<model>", api_key=..., api_base=OPENAI_BASE_URL)` is the
+  route to the Foundry deployment (switched from the `anthropic/` provider; not yet
+  verified live on GPT-6.1-Sol).
   PandasAI is the one place in this codebase where an LLM's generated code
   actually executes — scoped deliberately to an in-memory DataFrame reconstructed
   from a finding's already-stored rows, never a live DB connection; see
@@ -162,11 +167,11 @@ especially trade-offs that affect answer quality or evaluability.
   `SELECT` also parse as `exp.Table` with no schema — excluded from the
   "must be schema-qualified" check via the CTE's own alias set, or every
   `WITH x AS (...) SELECT * FROM x` query would be falsely rejected.
-- **Every direct Anthropic call site is `@observe(as_type="generation")` +
-  `tracing.record_generation(response)` right after `client.messages.create(...)`**
+- **Every direct LLM call site is `@observe(as_type="generation")` +
+  `tracing.record_generation(response)` right after `client.responses.create(...)`**
   (Phase 6b) — not Langfuse's recommended auto-instrumentor, which was tested for
   real and left model/usage/cost unpopulated by default. `record_generation` expects
-  a real `anthropic.types.Message` shape (`.model`, `.usage.input_tokens`,
+  a real Responses-API `Response` shape (`.model`, `.usage.input_tokens`,
   `.usage.output_tokens`); test stubs for these call sites must include `.usage`/
   `.model`, not just `.content` — found this the hard way when adding tracing broke
   5 existing stub-based unit tests. `answer_followup` (PandasAI) is the one
@@ -231,6 +236,15 @@ especially trade-offs that affect answer quality or evaluability.
   need column-provenance tracking through arbitrary SQL, or masked Postgres
   views, both out of scope for this project.
 
+- **Never run blocking DB/LLM calls on the event loop, and never run DDL per
+  request** (Phase 6d) — both made concurrent `ask_question` calls hang or serialize.
+  Sync LLM calls go through `asyncio.to_thread`; table/checkpointer setup runs once per
+  process. The read-only role has a 15s `statement_timeout` (`db.py`) because agent
+  SQL can be valid but unbounded; tool errors are returned to the model, not raised.
+- **gpt-6.1-sol needs the Responses API for function tools** and runs with
+  `reasoning.effort=low` by default (`OPENAI_REASONING_EFFORT`) to meet the latency target.
+  Azure's jailbreak filter 400s adversarial prompts; `check_scope` treats that as a refusal.
+
 ## Data: Olist Brazilian e-commerce
 
 Loaded by `scripts/fetch_data.py` (Kaggle → `data/raw/`) and `scripts/load_data.py`
@@ -288,5 +302,5 @@ documentation — re-verify with the `eda-profiling` skill if they look stale.
 ## Stack
 
 Python 3.11+ · uv · Postgres (Docker Compose) · FastMCP · LangGraph (+ Postgres
-checkpointer) · PandasAI · Slack Bolt (Socket Mode) · Langfuse · pytest · Anthropic SDK
-via Microsoft Foundry.
+checkpointer) · PandasAI · Slack Bolt (Socket Mode) · Langfuse · pytest · OpenAI SDK
+(GPT-6.1-Sol) via Microsoft Foundry.

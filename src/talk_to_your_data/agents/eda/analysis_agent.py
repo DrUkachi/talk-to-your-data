@@ -9,18 +9,25 @@ code computes deterministically" split, just applied one level downstream.
 """
 
 import json
-import os
 from datetime import datetime
 from typing import Any
 
-import anthropic
 from langfuse import observe
+from openai import OpenAI
 
+from talk_to_your_data.llm import (
+    ToolSpec,
+    first_tool_call,
+    get_client,
+    get_model,
+    reasoning_config,
+    to_openai_tool,
+)
 from talk_to_your_data.tracing import record_generation
 
 from .state import AnalysisLens, AnalysisResult, SqlResult
 
-CLASSIFY_LENS_TOOL: anthropic.types.ToolParam = {
+CLASSIFY_LENS_TOOL: ToolSpec = {
     "name": "classify_lens",
     "description": (
         "Classify which analytical lens fits this query result, and extract any "
@@ -48,23 +55,16 @@ CLASSIFY_LENS_TOOL: anthropic.types.ToolParam = {
 }
 
 
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-    )
-
-
 @observe(name="classify_lens", as_type="generation")
 def _classify(
     question: str,
     sql_result: SqlResult,
     *,
-    client: anthropic.Anthropic | None = None,
+    client: OpenAI | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
-    client = client or _client()
-    model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+    client = client or get_client()
+    model = model or get_model()
     rows = sql_result.rows
     sample = rows[:5] + rows[-5:] if len(rows) > 10 else rows
     prompt = (
@@ -80,17 +80,18 @@ def _classify(
         f"Row count: {len(rows)}\n"
         f"Sample rows: {json.dumps(sample, default=str)}"
     )
-    response = client.messages.create(
+    response = client.responses.create(
         model=model,
-        max_tokens=512,
-        tools=[CLASSIFY_LENS_TOOL],
-        messages=[{"role": "user", "content": prompt}],
+        max_output_tokens=8192,
+        reasoning=reasoning_config(),
+        tools=[to_openai_tool(CLASSIFY_LENS_TOOL)],
+        input=[{"role": "user", "content": prompt}],
     )
     record_generation(response)
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    tool_use = first_tool_call(response)
     if tool_use is None:
         raise RuntimeError("analysis_agent: model did not call classify_lens")
-    return dict(tool_use.input)  # type: ignore[arg-type]
+    return dict(tool_use.arguments)
 
 
 def compute_trend_stats(
@@ -153,7 +154,7 @@ def analyze(
     question: str,
     sql_result: SqlResult,
     *,
-    client: anthropic.Anthropic | None = None,
+    client: OpenAI | None = None,
     model: str | None = None,
 ) -> AnalysisResult:
     classification = _classify(question, sql_result, client=client, model=model)

@@ -12,6 +12,7 @@ originates a query against the database anyway.
 
 import json
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
@@ -55,6 +56,20 @@ def ensure_findings_table() -> None:
             conn.execute(text(ddl))
 
 
+def _json_default(value: Any) -> Any:
+    # Postgres AVG()/numeric columns come back as Decimal, which json.dumps
+    # can't serialize -- found via the Phase 6d eval suite's execution-accuracy
+    # scorer silently finding an empty result_rows for every AVG-based metric
+    # (avg_review_score, avg_delivery_days, late_delivery_rate, ...), because
+    # `default=str` was stringifying them into un-comparable text instead of
+    # numbers. float() first so these stay usable as numbers (by the eval
+    # scorer, and by PandasAI follow-ups reconstructing a DataFrame from this
+    # column); str() as the final fallback for anything else json can't handle.
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
+
+
 def save_finding(
     thread_id: str,
     finding: Finding,
@@ -88,7 +103,7 @@ def save_finding(
                 "confidence": finding.confidence,
                 "interpretation": finding.interpretation,
                 "result_columns": json.dumps(sql_result.columns),
-                "result_rows": json.dumps(sql_result.rows, default=str),
+                "result_rows": json.dumps(sql_result.rows, default=_json_default),
                 "parent_finding_id": parent_finding_id,
             },
         )

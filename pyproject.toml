@@ -8,7 +8,7 @@ dependencies = [
     "fastmcp>=0.2",
     "langgraph>=0.2",
     "langgraph-checkpoint-postgres>=2.0",
-    "anthropic>=0.40",
+    "openai>=2.0",
     "psycopg[binary]>=3.2",
     "sqlalchemy>=2.0",
     "pandas>=2.2",
@@ -49,7 +49,8 @@ asyncio_mode = "auto"
 pythonpath = ["scripts"]
 markers = [
     "integration: requires Docker Postgres running with data loaded (scripts/load_data.py)",
-    "llm: calls the real Anthropic/Foundry API (needs ANTHROPIC_API_KEY in .env)",
+    "llm: calls the real GPT-6.1-Sol/Foundry API (needs OPENAI_API_KEY in .env)",
+    "eval: the Phase 6d golden-set eval suite -- always also marked llm; lets CI target exactly this gating suite separately from every llm-marked test",
 ]
 addopts = "-m 'not integration and not llm'"
 

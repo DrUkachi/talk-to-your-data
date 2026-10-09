@@ -73,8 +73,9 @@ CASES = [
     (
         "avg_delivery_days",
         {},
-        "SELECT avg(EXTRACT(DAY FROM "
-        "(o.order_delivered_customer_date - o.order_purchase_timestamp))) AS avg_delivery_days \n"
+        "SELECT avg(EXTRACT(EPOCH FROM "
+        "(o.order_delivered_customer_date - o.order_purchase_timestamp)) / 86400.0) "
+        "AS avg_delivery_days \n"
         "FROM raw.orders o \n"
         "WHERE o.order_delivered_customer_date IS NOT NULL",
     ),

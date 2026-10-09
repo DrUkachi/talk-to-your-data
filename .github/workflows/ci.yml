@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  POSTGRES_HOST: localhost
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: olist
+  POSTGRES_USER: olist_app
+  POSTGRES_PASSWORD: changeme
+  POSTGRES_READONLY_USER: olist_readonly
+  POSTGRES_READONLY_PASSWORD: changeme
+  MCP_SERVER_HOST: 127.0.0.1
+  MCP_SERVER_PORT: "8000"
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+  OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
+  # Legacy, long-lived Kaggle API key pair -- NOT KAGGLE_API_TOKEN, which expires
+  # after 3 hours and can't be a stored secret. kagglehub resolves either
+  # automatically (confirmed by reading its source; see scripts/fetch_data.py).
+  KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+  KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: olist
+          POSTGRES_USER: olist_app
+          POSTGRES_PASSWORD: changeme
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U olist_app -d olist"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        # Pinned to a commit SHA, not a floating tag, per astral-sh/setup-uv's
+        # own README-recommended usage (checked directly, not guessed).
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --group dev --group data
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type-check
+        run: uv run mypy src/talk_to_your_data scripts
+
+      - name: Unit tests (fast, no DB/LLM)
+        run: uv run pytest -q
+
+      # The dataset is a static snapshot (see CLAUDE.md) -- cached so most runs
+      # don't re-download from Kaggle at all.
+      - name: Cache Kaggle dataset
+        id: cache-data
+        uses: actions/cache@v6
+        with:
+          path: data/raw
+          key: kaggle-olist-dataset-v1
+
+      - name: Fetch dataset
+        if: steps.cache-data.outputs.cache-hit != 'true'
+        run: uv run python scripts/fetch_data.py
+
+      - name: Load data and set up DB roles
+        run: |
+          uv run python scripts/load_data.py
+          uv run python scripts/setup_db_roles.py
+
+      - name: Integration tests
+        run: uv run pytest -q -m integration
+
+      - name: Start MCP server (needed for the eval suite)
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python -m talk_to_your_data.mcp_server.server &
+          # /mcp is a JSON-RPC/SSE endpoint, not a plain health check -- a bare
+          # curl correctly gets a 400 "missing session ID" (confirmed against a
+          # real running server, not assumed), which still proves the server is
+          # up and listening. "000" is curl's code for connection refused.
+          for _ in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://${MCP_SERVER_HOST}:${MCP_SERVER_PORT}/mcp")
+            [ "$code" != "000" ] && break
+            sleep 1
+          done
+
+      # The actual capstone gate: fails the PR if any dimension regresses below
+      # threshold (see src/talk_to_your_data/eval/run_eval.py). Not run on plain
+      # pushes to main, since every real review happens at the PR stage.
+      - name: Eval suite
+        if: github.event_name == 'pull_request'
+        run: uv run python -m talk_to_your_data.eval.run_eval

@@ -12,15 +12,22 @@ every other tool-use call site in this project, a malformed response raises
 rather than silently defaulting open or closed.
 """
 
-import os
 from typing import Any
 
-import anthropic
 from langfuse import observe
+from openai import BadRequestError, OpenAI
 
+from talk_to_your_data.llm import (
+    ToolSpec,
+    first_tool_call,
+    get_client,
+    get_model,
+    reasoning_config,
+    to_openai_tool,
+)
 from talk_to_your_data.tracing import record_generation
 
-SCOPE_CHECK_TOOL: anthropic.types.ToolParam = {
+SCOPE_CHECK_TOOL: ToolSpec = {
     "name": "check_scope",
     "description": (
         "Decide whether this question can be answered using the Olist e-commerce dataset."
@@ -47,22 +54,15 @@ SCOPE_DESCRIPTION = (
 )
 
 
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-    )
-
-
 @observe(name="check_scope", as_type="generation")
 def check_scope(
     question: str,
     *,
-    client: anthropic.Anthropic | None = None,
+    client: OpenAI | None = None,
     model: str | None = None,
 ) -> tuple[bool, str]:
-    client = client or _client()
-    model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+    client = client or get_client()
+    model = model or get_model()
     prompt = (
         f"{SCOPE_DESCRIPTION}\n\n"
         f"Question: {question}\n\n"
@@ -71,15 +71,23 @@ def check_scope(
         "refusing something that might be answerable. You must call check_scope "
         "to respond."
     )
-    response = client.messages.create(
-        model=model,
-        max_tokens=256,
-        tools=[SCOPE_CHECK_TOOL],
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        response = client.responses.create(
+            model=model,
+            max_output_tokens=8192,
+            reasoning=reasoning_config(),
+            tools=[to_openai_tool(SCOPE_CHECK_TOOL)],
+            input=[{"role": "user", "content": prompt}],
+        )
+    except BadRequestError as e:
+        # Azure's prompt filter (jailbreak detection etc.) rejects before the model
+        # runs -- for a scope check that is a refusal, not an error.
+        if getattr(e, "code", None) == "content_filter":
+            return False, "blocked by the platform content filter"
+        raise
     record_generation(response)
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    tool_use = first_tool_call(response)
     if tool_use is None:
         raise RuntimeError("scope_guard: model did not call check_scope")
-    result: dict[str, Any] = dict(tool_use.input)  # type: ignore[arg-type]
+    result: dict[str, Any] = dict(tool_use.arguments)
     return bool(result["in_scope"]), str(result.get("reasoning", ""))

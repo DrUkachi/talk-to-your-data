@@ -26,7 +26,8 @@ REFERENCE_QUERIES = {
     "customer_count": "SELECT COUNT(DISTINCT customer_unique_id) FROM raw.customers",
     "avg_review_score": "SELECT AVG(review_score) FROM raw.order_reviews",
     "avg_delivery_days": """
-        SELECT AVG(EXTRACT(DAY FROM (order_delivered_customer_date - order_purchase_timestamp)))
+        SELECT AVG(EXTRACT(EPOCH FROM (order_delivered_customer_date - order_purchase_timestamp))
+                   / 86400.0)
         FROM raw.orders
         WHERE order_delivered_customer_date IS NOT NULL
     """,

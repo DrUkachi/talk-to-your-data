@@ -20,9 +20,7 @@ from talk_to_your_data.guardrails.scope_guard import check_scope
 
 pytestmark = [
     pytest.mark.llm,
-    pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY configured"
-    ),
+    pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="no OPENAI_API_KEY configured"),
 ]
 
 IN_SCOPE_QUESTIONS = [

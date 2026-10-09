@@ -1,4 +1,4 @@
-"""record_generation against a REAL Anthropic response object -- confirms it
+"""record_generation against a REAL Responses-API response object -- confirms it
 doesn't raise against the real Message shape (not just the SimpleNamespace stub
 in test_tracing.py) and that the model/usage it extracts are sane, by capturing
 what it passes to Langfuse rather than trusting a stub's assumed shape.
@@ -15,16 +15,14 @@ making this test permanently and uninformatively red.
 import os
 from typing import Any
 
-import anthropic
 import pytest
+from openai import OpenAI
 
 from talk_to_your_data import tracing
 
 pytestmark = [
     pytest.mark.llm,
-    pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY configured"
-    ),
+    pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="no OPENAI_API_KEY configured"),
 ]
 
 
@@ -40,13 +38,13 @@ def test_record_generation_against_a_real_response(monkeypatch: pytest.MonkeyPat
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(tracing, "get_client", lambda: _StubGeneration(calls))
 
-    client = anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
+    client = OpenAI(
+        api_key=os.environ["OPENAI_API_KEY"],
+        base_url=os.environ.get("OPENAI_BASE_URL") or None,
     )
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
-    response = client.messages.create(
-        model=model, max_tokens=16, messages=[{"role": "user", "content": "Say OK."}]
+    model = os.environ.get("OPENAI_MODEL", "gpt-6.1-sol")
+    response = client.responses.create(
+        model=model, max_output_tokens=256, input=[{"role": "user", "content": "Say OK."}]
     )
 
     tracing.record_generation(response)

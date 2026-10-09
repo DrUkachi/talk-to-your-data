@@ -7,16 +7,19 @@ system prompt instructs tool use explicitly instead, and a turn cap plus a
 "never answer without a tool call" check are what keep this grounded.
 """
 
-import os
-from typing import Any, cast
+import asyncio
+import json
+from typing import Any
 
-import anthropic
 from fastmcp import Client
-from langfuse import get_client, observe
+from langfuse import get_client as get_langfuse
+from langfuse import observe
+from openai import OpenAI
 
+from talk_to_your_data.llm import get_client, get_model, reasoning_config, tool_calls
 from talk_to_your_data.tracing import record_generation
 
-from .mcp_tools import call_tool, list_anthropic_tools, mcp_server_url
+from .mcp_tools import call_tool, list_openai_tools, mcp_server_url
 from .state import SqlResult
 
 MAX_TURNS = 6
@@ -32,59 +35,65 @@ SYSTEM_PROMPT = (
 )
 
 
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-    )
-
-
 @observe(name="sql_agent", as_type="agent")
 async def run_sql_agent(
-    question: str, *, llm_client: anthropic.Anthropic | None = None, mcp_url: str | None = None
+    question: str, *, llm_client: OpenAI | None = None, mcp_url: str | None = None
 ) -> SqlResult:
-    llm_client = llm_client or _client()
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
-    langfuse = get_client()
+    llm_client = llm_client or get_client()
+    model = get_model()
+    langfuse = get_langfuse()
 
     async with Client(mcp_url or mcp_server_url()) as mcp_client:
-        tools = await list_anthropic_tools(mcp_client)
-        messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
+        tools = await list_openai_tools(mcp_client)
+        messages: list[Any] = [{"role": "user", "content": question}]
         last_result: SqlResult | None = None
 
         for turn in range(MAX_TURNS):
             with langfuse.start_as_current_observation(
                 name=f"sql_agent-turn-{turn}", as_type="generation"
             ):
-                response = llm_client.messages.create(
+                response = await asyncio.to_thread(
+                    llm_client.responses.create,
                     model=model,
-                    max_tokens=2048,
-                    system=SYSTEM_PROMPT,
+                    max_output_tokens=8192,
+                    reasoning=reasoning_config(),
+                    instructions=SYSTEM_PROMPT,
                     tools=tools,
-                    messages=cast(list[anthropic.types.MessageParam], messages),
+                    input=messages,
                 )
                 record_generation(response)
-            messages.append({"role": "assistant", "content": response.content})
+            # reasoning items must be echoed back alongside their function calls
+            messages.extend(item.model_dump(exclude_none=True) for item in response.output)
 
-            tool_uses = [b for b in response.content if b.type == "tool_use"]
-            if not tool_uses:
+            calls = tool_calls(response)
+            if not calls:
                 break
 
-            tool_results = []
-            for tool_use in tool_uses:
+            for call in calls:
                 with langfuse.start_as_current_observation(
-                    name=tool_use.name, as_type="tool", input=tool_use.input
+                    name=call.name, as_type="tool", input=call.arguments
                 ) as tool_span:
-                    result = await call_tool(mcp_client, tool_use.name, dict(tool_use.input))
+                    try:
+                        result = await call_tool(mcp_client, call.name, call.arguments)
+                    except Exception as e:  # noqa: BLE001 -- tool errors (timeouts, guard
+                        # rejections) go back to the model so it can fix its query
+                        result = {"error": str(e)}
                     tool_span.update(output=result)
-                if tool_use.name in ("query_metric", "run_sql") and isinstance(result, dict):
+                if (
+                    call.name in ("query_metric", "run_sql")
+                    and isinstance(result, dict)
+                    and "error" not in result
+                ):
                     last_result = SqlResult(
                         sql=result["sql"], columns=result["columns"], rows=result["rows"]
                     )
-                tool_results.append(
-                    {"type": "tool_result", "tool_use_id": tool_use.id, "content": str(result)}
+                messages.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.id,
+                        "output": json.dumps(result, default=str),
+                    }
                 )
-            messages.append({"role": "user", "content": tool_results})
 
     if last_result is None:
         raise RuntimeError(

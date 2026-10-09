@@ -1,7 +1,7 @@
 """Full graph runs against the synthetic dirty fixture. The LLM is stubbed here
 (see test_llm_propose_fixes.py for the tool-use plumbing itself) because these
 tests are about profile -> propose -> interrupt -> apply -> validate -> loop
-wiring, not LLM output quality -- and no real Anthropic/Foundry credentials are
+wiring, not LLM output quality -- and no real GPT-6.1-Sol/Foundry credentials are
 configured in this environment anyway.
 """
 

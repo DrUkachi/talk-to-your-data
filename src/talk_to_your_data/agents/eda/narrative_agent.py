@@ -6,17 +6,24 @@ narrative to drift from what was actually asked or actually run.
 """
 
 import json
-import os
 from typing import Any
 
-import anthropic
 from langfuse import observe
+from openai import OpenAI
 
+from talk_to_your_data.llm import (
+    ToolSpec,
+    first_tool_call,
+    get_client,
+    get_model,
+    reasoning_config,
+    to_openai_tool,
+)
 from talk_to_your_data.tracing import record_generation
 
 from .state import AnalysisResult, Finding, SqlResult
 
-WRITE_FINDING_TOOL: anthropic.types.ToolParam = {
+WRITE_FINDING_TOOL: ToolSpec = {
     "name": "write_finding",
     "description": "Write up the result of a data analysis as a business-readable finding.",
     "input_schema": {
@@ -48,24 +55,17 @@ WRITE_FINDING_TOOL: anthropic.types.ToolParam = {
 }
 
 
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-    )
-
-
 @observe(name="write_finding", as_type="generation")
 def write_finding(
     question: str,
     sql_result: SqlResult,
     analysis_result: AnalysisResult | None,
     *,
-    client: anthropic.Anthropic | None = None,
+    client: OpenAI | None = None,
     model: str | None = None,
 ) -> Finding:
-    client = client or _client()
-    model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+    client = client or get_client()
+    model = model or get_model()
 
     prompt = (
         "Write up this data analysis as a finding. Every number in your "
@@ -77,23 +77,24 @@ def write_finding(
         "Analysis: "
         f"{json.dumps(analysis_result.model_dump(mode='json') if analysis_result else None)}"
     )
-    response = client.messages.create(
+    response = client.responses.create(
         model=model,
-        max_tokens=1024,
-        tools=[WRITE_FINDING_TOOL],
-        messages=[{"role": "user", "content": prompt}],
+        max_output_tokens=8192,
+        reasoning=reasoning_config(),
+        tools=[to_openai_tool(WRITE_FINDING_TOOL)],
+        input=[{"role": "user", "content": prompt}],
     )
     record_generation(response)
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    tool_use = first_tool_call(response)
     if tool_use is None:
         raise RuntimeError("narrative_agent: model did not call write_finding")
-    fields: dict[str, Any] = dict(tool_use.input)  # type: ignore[arg-type]
+    fields: dict[str, Any] = dict(tool_use.arguments)
 
     return Finding(
         question=question,
         sql=sql_result.sql,
         result_summary=str(fields["result_summary"]),
         caveats=str(fields["caveats"]),
-        confidence=fields["confidence"],  # type: ignore[arg-type]
+        confidence=fields["confidence"],
         interpretation=str(fields["interpretation"]),
     )

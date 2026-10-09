@@ -1,7 +1,7 @@
 """Regression check for the supervisor's routing judgment against the real model
 (ROADMAP's Phase 4 evaluation note) -- run explicitly with `uv run pytest -m llm`.
 
-Needs BOTH real ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL credentials AND the MCP
+Needs BOTH real OPENAI_API_KEY/OPENAI_BASE_URL credentials AND the MCP
 server actually running (`uv run python -m talk_to_your_data.mcp_server.server`)
 -- sql_agent calls it over HTTP, same as Phase 2 designed it to be reached.
 Costs real tokens; not part of the default or `-m integration` suite.
@@ -20,9 +20,7 @@ pytestmark = [
     # llm only, deliberately not also `integration` -- so a plain `-m integration`
     # run doesn't sweep in real, costly LLM calls; use `-m llm` explicitly for this.
     pytest.mark.llm,
-    pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY configured"
-    ),
+    pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="no OPENAI_API_KEY configured"),
 ]
 
 

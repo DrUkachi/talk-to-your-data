@@ -10,39 +10,7 @@ import pytest
 from talk_to_your_data.agents.eda import followup_agent
 from talk_to_your_data.agents.eda.followup_agent import _needs_fresh_data, _normalize_response
 from talk_to_your_data.agents.eda.state import Finding
-
-
-class _StubUsage:
-    def __init__(self, input_tokens: int = 10, output_tokens: int = 10):
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
-
-
-class _StubToolUseBlock:
-    type = "tool_use"
-
-    def __init__(self, input_: dict):
-        self.input = input_
-
-
-class _StubResponse:
-    def __init__(self, content: list, model: str = "claude-opus-5-5"):
-        self.content = content
-        self.model = model
-        self.usage = _StubUsage()
-
-
-class _StubMessages:
-    def __init__(self, response: _StubResponse):
-        self._response = response
-
-    def create(self, **kwargs):
-        return self._response
-
-
-class _StubClient:
-    def __init__(self, response: _StubResponse):
-        self.messages = _StubMessages(response)
+from tests.llm_stubs import StubClient, StubResponse, StubToolUseBlock
 
 
 def test_normalizes_string_response():
@@ -95,23 +63,23 @@ def test_handles_missing_last_code_executed():
 
 
 def test_needs_fresh_data_parses_true():
-    response = _StubResponse(
-        content=[_StubToolUseBlock({"needs_fresh_data": True, "reasoning": "no category column"})]
+    response = StubResponse(
+        content=[StubToolUseBlock({"needs_fresh_data": True, "reasoning": "no category column"})]
     )
-    assert _needs_fresh_data("q", "a", client=_StubClient(response)) is True
+    assert _needs_fresh_data("q", "a", client=StubClient(response)) is True
 
 
 def test_needs_fresh_data_parses_false():
-    response = _StubResponse(
-        content=[_StubToolUseBlock({"needs_fresh_data": False, "reasoning": "genuine answer"})]
+    response = StubResponse(
+        content=[StubToolUseBlock({"needs_fresh_data": False, "reasoning": "genuine answer"})]
     )
-    assert _needs_fresh_data("q", "a", client=_StubClient(response)) is False
+    assert _needs_fresh_data("q", "a", client=StubClient(response)) is False
 
 
 def test_needs_fresh_data_raises_when_model_does_not_call_the_tool():
-    response = _StubResponse(content=[])
+    response = StubResponse(content=[])
     with pytest.raises(RuntimeError, match="did not call assess_followup_answer"):
-        _needs_fresh_data("q", "a", client=_StubClient(response))
+        _needs_fresh_data("q", "a", client=StubClient(response))
 
 
 PARENT = {

@@ -61,7 +61,7 @@ curl -X POST localhost:8002/findings/<finding_id>/followup -H 'content-type: app
   -d '{"question": "What is the combined total of the top 3?"}'
 ```
 
-Proposing fixes and asking questions both call the LLM (`ANTHROPIC_API_KEY`/
-`ANTHROPIC_BASE_URL` in `.env`) -- without real credentials, cleaning runs against tables
+Proposing fixes and asking questions both call the LLM (`OPENAI_API_KEY`/
+`OPENAI_BASE_URL` in `.env`) -- without real credentials, cleaning runs against tables
 with no findings still work end-to-end (`status: done` immediately), but anything that
 needs the model (a cleaning run with findings, any EDA question) will fail at that step.

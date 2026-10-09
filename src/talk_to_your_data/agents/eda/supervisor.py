@@ -9,16 +9,23 @@ what makes this a genuine supervisor topology rather than Python if/else wearing
 an LLM costume for the one real decision.
 """
 
-import os
+import asyncio
 from contextlib import AbstractAsyncContextManager
 
-import anthropic
 from langfuse import observe
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from talk_to_your_data.checkpointer import compiled_graph_async
+from talk_to_your_data.llm import (
+    ToolSpec,
+    first_tool_call,
+    get_client,
+    get_model,
+    reasoning_config,
+    to_openai_tool,
+)
 from talk_to_your_data.tracing import record_generation
 
 from .analysis_agent import analyze
@@ -29,7 +36,7 @@ from .state import AgentState, AnalysisResult, SqlResult
 
 MAX_TURNS = 8
 
-ROUTE_TOOL: anthropic.types.ToolParam = {
+ROUTE_TOOL: ToolSpec = {
     "name": "route",
     "description": "Decide which agent handles the next step of answering this question.",
     "input_schema": {
@@ -59,17 +66,10 @@ ROUTING_RULES = (
 )
 
 
-def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-    )
-
-
 @observe(name="supervisor_route", as_type="generation")
 def _route(state: AgentState) -> dict:
-    client = _client()
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+    client = get_client()
+    model = get_model()
     prompt = (
         f"{ROUTING_RULES}\n\n"
         f"Question: {state['question']}\n"
@@ -78,24 +78,25 @@ def _route(state: AgentState) -> dict:
         f"Has finding: {state.get('finding') is not None}\n"
         "You must call route to respond."
     )
-    response = client.messages.create(
+    response = client.responses.create(
         model=model,
-        max_tokens=256,
-        tools=[ROUTE_TOOL],
-        messages=[{"role": "user", "content": prompt}],
+        max_output_tokens=8192,
+        reasoning=reasoning_config(),
+        tools=[to_openai_tool(ROUTE_TOOL)],
+        input=[{"role": "user", "content": prompt}],
     )
     record_generation(response)
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    tool_use = first_tool_call(response)
     if tool_use is None:
         raise RuntimeError("supervisor: model did not call route")
-    return dict(tool_use.input)  # type: ignore[arg-type]
+    return dict(tool_use.arguments)
 
 
 async def supervisor_node(state: AgentState) -> dict:
     turn = state.get("turn", 0) + 1
     if turn > state.get("max_turns", MAX_TURNS):
         return {"next": "FINISH", "turn": turn, "status": "failed"}
-    decision = _route(state)
+    decision = await asyncio.to_thread(_route, state)
     update: dict = {"next": decision["next"], "turn": turn}
     # Only set "routing" while there's still work ahead -- otherwise this
     # overwrites narrative_agent's "done" on the final pass back through here.
@@ -116,7 +117,7 @@ async def sql_agent_node(state: AgentState) -> dict:
 
 async def analysis_agent_node(state: AgentState) -> dict:
     sql_result = SqlResult.model_validate(state["sql_result"])
-    result = analyze(state["question"], sql_result)
+    result = await asyncio.to_thread(analyze, state["question"], sql_result)
     return {"analysis_result": result.model_dump(mode="json")}
 
 
@@ -127,8 +128,8 @@ async def narrative_agent_node(state: AgentState) -> dict:
         if state.get("analysis_result")
         else None
     )
-    finding = write_finding(state["question"], sql_result, analysis_result)
-    save_finding(state["thread_id"], finding, sql_result)
+    finding = await asyncio.to_thread(write_finding, state["question"], sql_result, analysis_result)
+    await asyncio.to_thread(save_finding, state["thread_id"], finding, sql_result)
     return {"finding": finding.model_dump(mode="json"), "status": "done"}
 
 

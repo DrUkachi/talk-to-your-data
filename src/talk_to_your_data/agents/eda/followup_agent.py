@@ -5,9 +5,8 @@ The DataFrame it operates on is reconstructed from result_columns/result_rows
 stored at save time (findings_store.py), not a fresh query -- a follow-up seeing
 different data than what the user actually looked at would be confusing.
 
-No official pandasai-anthropic package exists; pandasai-litellm does, and LiteLLM's
-"anthropic/" provider accepts a custom api_base -- confirmed against the real
-aie-academy-hub Foundry endpoint before building this, not assumed.
+PandasAI goes through pandasai-litellm; LiteLLM's "openai/" provider accepts a
+custom api_base, which is how it reaches the Foundry OpenAI-compatible endpoint.
 
 response.to_dict() shape (also confirmed against the real model, not guessed):
 {"value": ..., "type": "string"|"number"|"dataframe"|"chart", "last_code_executed":
@@ -18,8 +17,8 @@ the number. A "chart" response's value is a local PNG path -- the first time
 Finding.chart_ref is ever populated; Phase 6 still needs to get it somewhere a
 Slack client can actually fetch it (see docs/architecture.md's failure-modes table).
 
-Tracing: this is the one Anthropic call site PandasAI owns internally (df.chat()
-never hands back the raw Message), so the explicit record_generation() pattern used
+Tracing: this is the one LLM call site PandasAI owns internally (df.chat()
+never hands back the raw response), so the explicit record_generation() pattern used
 everywhere else in this project can't apply -- there's no response object to read
 model/usage/cost off of. LiteLLM ships its own Langfuse integration for exactly
 this (`litellm.success_callback`/`failure_callback`), verified for real against the
@@ -49,13 +48,21 @@ import os
 import threading
 from typing import Any
 
-import anthropic
 import litellm
 import pandas as pd
 import pandasai as pai
 from langfuse import observe
+from openai import OpenAI
 from pandasai_litellm import LiteLLM
 
+from talk_to_your_data.llm import (
+    ToolSpec,
+    first_tool_call,
+    get_client,
+    get_model,
+    reasoning_config,
+    to_openai_tool,
+)
 from talk_to_your_data.tracing import record_generation
 
 from .ask import ask_question
@@ -74,11 +81,11 @@ def _ensure_configured() -> None:
     with _configure_lock:
         if _configured:
             return
-        model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+        model = get_model()
         llm = LiteLLM(
-            model=f"anthropic/{model}",
-            api_key=os.environ["ANTHROPIC_API_KEY"],
-            api_base=os.environ.get("ANTHROPIC_BASE_URL") or None,
+            model=f"openai/{model}",
+            api_key=os.environ["OPENAI_API_KEY"],
+            api_base=os.environ.get("OPENAI_BASE_URL") or None,
         )
         pai.config.set({"llm": llm})
         litellm.success_callback = ["langfuse"]
@@ -102,7 +109,7 @@ def _normalize_response(response_dict: dict[str, Any]) -> tuple[SqlResult, str |
     return SqlResult(sql=code, columns=["answer"], rows=[{"answer": value}]), None
 
 
-NEEDS_FRESH_DATA_TOOL: anthropic.types.ToolParam = {
+NEEDS_FRESH_DATA_TOOL: ToolSpec = {
     "name": "assess_followup_answer",
     "description": (
         "Decide whether a follow-up answer was limited because the already-shown "
@@ -127,23 +134,16 @@ NEEDS_FRESH_DATA_TOOL: anthropic.types.ToolParam = {
 }
 
 
-def _llm_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-    )
-
-
 @observe(name="assess_followup_answer", as_type="generation")
 def _needs_fresh_data(
     question: str,
     answer: str,
     *,
-    client: anthropic.Anthropic | None = None,
+    client: OpenAI | None = None,
     model: str | None = None,
 ) -> bool:
-    client = client or _llm_client()
-    model = model or os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
+    client = client or get_client()
+    model = model or get_model()
     prompt = (
         "A follow-up question was answered using only data already shown to the "
         "user (not a fresh query). Decide whether the answer indicates that data "
@@ -152,17 +152,18 @@ def _needs_fresh_data(
         "assess_followup_answer to respond.\n\n"
         f"Question: {question}\nAnswer: {answer}"
     )
-    response = client.messages.create(
+    response = client.responses.create(
         model=model,
-        max_tokens=256,
-        tools=[NEEDS_FRESH_DATA_TOOL],
-        messages=[{"role": "user", "content": prompt}],
+        max_output_tokens=8192,
+        reasoning=reasoning_config(),
+        tools=[to_openai_tool(NEEDS_FRESH_DATA_TOOL)],
+        input=[{"role": "user", "content": prompt}],
     )
     record_generation(response)
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+    tool_use = first_tool_call(response)
     if tool_use is None:
         raise RuntimeError("answer_followup: model did not call assess_followup_answer")
-    return bool(tool_use.input["needs_fresh_data"])  # type: ignore[arg-type]
+    return bool(tool_use.arguments["needs_fresh_data"])
 
 
 @observe(name="answer_followup", as_type="agent")

@@ -1,7 +1,7 @@
 """Regression check against the real Foundry-hosted model (ROADMAP's Phase 3
 evaluation note) -- run explicitly with `uv run pytest -m llm` whenever
 llm.py's prompt or tool schema changes. Not part of the default suite: needs
-real ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL credentials and costs real tokens.
+real OPENAI_API_KEY/OPENAI_BASE_URL credentials and costs real tokens.
 
 Assertions are intentionally soft on *exactly* which findings get a proposal --
 a model judging a fix unsafe to apply automatically (e.g. a negative `amount`
@@ -22,9 +22,7 @@ pytestmark = [
     # llm only, deliberately not also `integration` -- so a plain `-m integration`
     # run doesn't sweep in real, costly LLM calls; use `-m llm` explicitly for this.
     pytest.mark.llm,
-    pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"), reason="no ANTHROPIC_API_KEY configured"
-    ),
+    pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="no OPENAI_API_KEY configured"),
 ]
 
 

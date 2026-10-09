@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 6c (Slackbot) complete. Phase 6d (Eval suite + CI) not started.**
+**Current status: Phase 6 complete (6a-6d). Main LLM is GPT-6.1-Sol via Foundry's Responses API.**
 
 ---
 
@@ -691,17 +691,40 @@ with no uvicorn banner to flush it.
   (deliberately the only real listener) already covers mentions. Silences log
   noise without silently dropping the duplicate event somewhere less visible.
 
-### Phase 6d — Eval suite + CI
+### Phase 6d — Eval suite + CI ✅
 
-- [ ] 40-question golden set, each with an independently-computed expected value
-- [ ] Scoring functions in code for all three dimensions (not eyeballed):
+- [x] 40-question golden set, each with an independently-computed expected value
+- [x] Scoring functions in code for all three dimensions (not eyeballed):
   - **Execution accuracy** — expected value vs. the pipeline's answer, within tolerance
   - **Faithfulness** — every number in the narrative traceable to the finding's stored
     `result_rows` (Phase 5's JSONB columns make this directly queryable)
   - **Refusal correctness** — out-of-scope questions in the set correctly hit 6a's
     refusal path
-- [ ] CI job (GitHub Actions) that runs lint/type-check/unit/integration always, and
+- [x] CI job (GitHub Actions) that runs lint/type-check/unit/integration always, and
       the eval suite on PRs, failing the PR if any dimension regresses below threshold
+
+#### Phase 6d summary
+
+**Built:** 40-question golden set (26 answerable with hand-computed reference SQL, 14
+out-of-scope), three code scorers, `eval/run_eval.py` (exit non-zero below threshold),
+and `.github/workflows/ci.yml` (lint/mypy/unit/integration always; eval on PRs).
+
+**Result on GPT-6.1-Sol (2026-10-09):** execution accuracy 100%, faithfulness 100%,
+refusal correctness 100%, p50 latency 19.2s over 5 serial questions.
+
+**Bugs the eval found (not unit tests):**
+- `avg_delivery_days` used `EXTRACT(DAY FROM interval)`, which truncates to whole days
+  and understated the average by ~0.5 day (12.09 vs 12.56). Now EPOCH/86400.
+- No statement timeout on the read-only role: a valid-but-slow agent query ran 10+
+  minutes and hung every question. Now 15s; the error goes back to the model.
+- Per-call DDL (`ensure_findings_table`, checkpointer setup) deadlocked under
+  concurrency; sync LLM calls blocked the event loop. Setup is once per process; LLM
+  calls run via `asyncio.to_thread`.
+- MCP serializes Decimals as strings; the scorer now parses them.
+
+**Deviations:** latency is measured on a serial probe (concurrent latency measures
+queueing, not the single-user target). Provider moved Claude -> GPT-6.1-Sol mid-phase
+(see `src/talk_to_your_data/llm.py`).
 
 **Evaluation note — this is the full rubric, each dimension needs a scoring function
 in code, not eyeballing:**

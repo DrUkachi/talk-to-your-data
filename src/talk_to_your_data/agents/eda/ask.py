@@ -9,6 +9,7 @@ so a refusal is transparent to every adapter without any of them needing to
 know a refusal path exists.
 """
 
+import asyncio
 import uuid
 
 from langgraph.types import RunnableConfig
@@ -21,12 +22,17 @@ from .supervisor import eda_graph
 
 MAX_TURNS = 8
 
+_findings_table_ready = False
+
 
 async def ask_question(question: str, thread_id: str | None = None) -> Finding:
-    ensure_findings_table()
+    global _findings_table_ready
+    if not _findings_table_ready:  # DDL once per process -- see checkpointer.py
+        ensure_findings_table()
+        _findings_table_ready = True
     thread_id = thread_id or str(uuid.uuid4())
 
-    in_scope, reasoning = check_scope(question)
+    in_scope, reasoning = await asyncio.to_thread(check_scope, question)
     if not in_scope:
         finding = Finding(
             question=question,

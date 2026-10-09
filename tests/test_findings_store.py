@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import text
 
@@ -68,6 +70,23 @@ def test_get_finding_round_trips_result_columns_and_rows(clean_findings_table):
 
 def test_get_finding_returns_none_for_unknown_id(clean_findings_table):
     assert get_finding("00000000-0000-0000-0000-000000000000") is None
+
+
+def test_decimal_values_round_trip_as_numbers_not_strings(clean_findings_table):
+    # Postgres AVG()/numeric columns come back as Decimal -- found via the
+    # Phase 6d eval suite silently getting an empty-candidates list for every
+    # AVG-based metric, because the old `default=str` json.dumps fallback
+    # stringified them instead of converting to a number.
+    decimal_result = SqlResult(
+        sql="SELECT AVG(x)", columns=["avg_x"], rows=[{"avg_x": Decimal("2.8533488631769440")}]
+    )
+    finding_id = save_finding("test-decimal", _finding(), decimal_result)
+
+    stored = get_finding(finding_id)
+    assert stored is not None
+    value = stored["result_rows"][0]["avg_x"]
+    assert isinstance(value, float)
+    assert value == pytest.approx(2.8533488631769440)
 
 
 def test_get_latest_finding_for_thread_returns_the_most_recent(clean_findings_table):

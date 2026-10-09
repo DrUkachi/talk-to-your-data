@@ -15,7 +15,7 @@ from talk_to_your_data.agents.cleaning import profiling
 from talk_to_your_data.db import app_engine
 
 # Loaded here, not just lazily inside db.py/llm.py, so collection-time checks
-# (e.g. a `skipif` on ANTHROPIC_API_KEY) see the real environment too.
+# (e.g. a `skipif` on OPENAI_API_KEY) see the real environment too.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 FIXTURE_SCHEMA = "clean"

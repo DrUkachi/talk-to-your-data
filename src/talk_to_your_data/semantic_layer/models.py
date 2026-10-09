@@ -103,7 +103,10 @@ MODELS: dict[str, Model] = {
         from_sql="raw.orders o",
         measures={
             "delivery_days": (
-                "EXTRACT(DAY FROM (o.order_delivered_customer_date - o.order_purchase_timestamp))"
+                # EPOCH/86400, not EXTRACT(DAY ...): the latter truncates to whole days
+                # and understated the average by ~0.5 day (found by the Phase 6d eval).
+                "EXTRACT(EPOCH FROM "
+                "(o.order_delivered_customer_date - o.order_purchase_timestamp)) / 86400.0"
             ),
             "is_late": (
                 "CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date "

@@ -18,9 +18,7 @@ def _finding(**overrides) -> Finding:
 
 
 def _block_texts(blocks: list[dict]) -> str:
-    return "\n".join(
-        b["text"]["text"] for b in blocks if b["type"] in ("section",) and "text" in b
-    )
+    return "\n".join(b["text"]["text"] for b in blocks if b["type"] in ("section",) and "text" in b)
 
 
 def test_includes_interpretation_and_result_summary():
@@ -54,9 +52,9 @@ def test_refusal_with_empty_sql_gets_a_placeholder_not_an_empty_code_block():
 def test_long_sql_is_truncated():
     long_sql = "SELECT " + "a, " * 2000 + "1"
     blocks = finding_to_blocks(_finding(sql=long_sql))
-    sql_block_text = next(
-        b for b in blocks if "text" in b and "```" in b["text"]["text"]
-    )["text"]["text"]
+    sql_block_text = next(b for b in blocks if "text" in b and "```" in b["text"]["text"])["text"][
+        "text"
+    ]
     assert len(sql_block_text) < len(long_sql)
     assert "truncated" in sql_block_text
     assert len(sql_block_text) <= MAX_SQL_BLOCK_CHARS + 100

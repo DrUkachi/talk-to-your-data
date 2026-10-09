@@ -1,7 +1,10 @@
 """Download the Olist Brazilian e-commerce dataset from Kaggle into data/raw/.
 
-Auth: kagglehub reads the KAGGLE_API_TOKEN env var directly (new-style access
-token, not the legacy username+key pair). Load it from .env before running:
+Auth: kagglehub resolves credentials itself (confirmed by reading
+kagglehub.config.get_kaggle_credentials, not assumed) -- KAGGLE_API_TOKEN (new-style
+access token, 3 hours, local dev) takes priority if set, else KAGGLE_USERNAME+
+KAGGLE_KEY (legacy, long-lived, what CI uses since a 3-hour token can't be a stored
+secret). Load credentials from .env before running:
 
     uv run --group data python scripts/fetch_data.py
 
@@ -39,11 +42,14 @@ def main() -> None:
         logger.info("Pass --force to re-download.")
         return
 
-    if not os.environ.get("KAGGLE_API_TOKEN"):
+    has_token = bool(os.environ.get("KAGGLE_API_TOKEN"))
+    has_legacy_pair = bool(os.environ.get("KAGGLE_USERNAME")) and bool(os.environ.get("KAGGLE_KEY"))
+    if not has_token and not has_legacy_pair:
         logger.error(
-            "KAGGLE_API_TOKEN is not set. Generate one at "
-            "https://www.kaggle.com/settings/api (expires after 3 hours) and put it "
-            "in .env."
+            "No Kaggle credentials set. Either KAGGLE_API_TOKEN (generate at "
+            "https://www.kaggle.com/settings/api, expires after 3 hours -- local dev) "
+            "or both KAGGLE_USERNAME and KAGGLE_KEY (legacy, long-lived -- what CI uses) "
+            "must be set."
         )
         sys.exit(1)
 

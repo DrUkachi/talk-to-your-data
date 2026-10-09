@@ -23,6 +23,12 @@ from .db import REPO_ROOT, app_engine
 
 CHECKPOINT_SCHEMA = "langgraph"
 
+# Schema/table setup is DDL: run it once per process. Re-running it per call let
+# concurrent asks (the eval suite runs 5 at once) deadlock -- a blocking DDL call on
+# the event loop waited on a lock held by a suspended coroutine's open setup
+# transaction, hanging every question indefinitely.
+_async_setup_done = False
+
 
 def checkpointer_conn_string() -> str:
     load_dotenv(REPO_ROOT / ".env")
@@ -52,8 +58,12 @@ async def compiled_graph_async(
     `fastmcp.Client` is async-only, so any node that calls it must be a coroutine,
     which means the graph needs an async checkpointer too (a sync PostgresSaver
     would block the event loop on every checkpoint read/write)."""
-    with app_engine().begin() as conn:
-        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {CHECKPOINT_SCHEMA}"))
+    global _async_setup_done
+    if not _async_setup_done:
+        with app_engine().begin() as conn:
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {CHECKPOINT_SCHEMA}"))
     async with AsyncPostgresSaver.from_conn_string(checkpointer_conn_string()) as saver:
-        await saver.setup()
+        if not _async_setup_done:
+            await saver.setup()
+            _async_setup_done = True
         yield build_graph(saver)

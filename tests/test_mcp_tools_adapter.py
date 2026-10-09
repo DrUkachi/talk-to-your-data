@@ -1,6 +1,6 @@
 from mcp.types import Tool as MCPTool
 
-from talk_to_your_data.agents.eda.mcp_tools import mcp_tool_to_anthropic
+from talk_to_your_data.agents.eda.mcp_tools import mcp_tool_to_openai
 
 
 def test_adapts_name_description_and_schema():
@@ -13,13 +13,14 @@ def test_adapts_name_description_and_schema():
             "required": ["metric"],
         },
     )
-    adapted = mcp_tool_to_anthropic(tool)
+    adapted = mcp_tool_to_openai(tool)
+    assert adapted["type"] == "function"
     assert adapted["name"] == "query_metric"
     assert adapted["description"] == "Run a metric query."
-    assert adapted["input_schema"]["properties"]["metric"]["type"] == "string"
+    assert adapted["parameters"]["properties"]["metric"]["type"] == "string"
 
 
 def test_handles_missing_description():
     tool = MCPTool(name="x", description=None, input_schema={"type": "object", "properties": {}})
-    adapted = mcp_tool_to_anthropic(tool)
+    adapted = mcp_tool_to_openai(tool)
     assert adapted["description"] == ""

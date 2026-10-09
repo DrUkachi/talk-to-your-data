@@ -15,13 +15,18 @@ from sqlalchemy import Engine, create_engine
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def _engine(user_env: str, password_env: str) -> Engine:
+# Agent-written SQL is valid-but-unbounded: a correlated NOT EXISTS over an unindexed
+# table ran for 10+ minutes in the eval suite and hung every question behind it.
+READONLY_STATEMENT_TIMEOUT_MS = 15_000
+
+
+def _engine(user_env: str, password_env: str, **connect_args: str) -> Engine:
     load_dotenv(REPO_ROOT / ".env")
     url = (
         f"postgresql+psycopg://{os.environ[user_env]}:{os.environ[password_env]}"
         f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}/{os.environ['POSTGRES_DB']}"
     )
-    return create_engine(url)
+    return create_engine(url, connect_args=connect_args)
 
 
 def app_engine() -> Engine:
@@ -29,4 +34,8 @@ def app_engine() -> Engine:
 
 
 def readonly_engine() -> Engine:
-    return _engine("POSTGRES_READONLY_USER", "POSTGRES_READONLY_PASSWORD")
+    return _engine(
+        "POSTGRES_READONLY_USER",
+        "POSTGRES_READONLY_PASSWORD",
+        options=f"-c statement_timeout={READONLY_STATEMENT_TIMEOUT_MS}",
+    )

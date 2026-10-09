@@ -1,14 +1,14 @@
-"""Shared helper for attaching real model/usage/cost from an Anthropic response
+"""Shared helper for attaching real model/usage/cost from a Responses-API response
 to the current Langfuse generation observation (the span created by
-@observe(as_type="generation") around each of this project's direct Anthropic
+@observe(as_type="generation") around each of this project's direct LLM
 call sites: propose_fixes, run_sql_agent's per-turn calls, classify_lens,
 write_finding, _route, check_scope).
 
 Explicit, not auto-instrumented. Tested `opentelemetry-instrumentation-anthropic`
-(Langfuse's own recommended path) for real against a running Foundry endpoint:
-it produces correctly-typed, correctly-nested spans, but querying one back left
-model/usage/cost/input/output all unpopulated in default config. This project
-has a small, fixed number of Anthropic call sites, all already behind named
+(Langfuse's own recommended path, when this project was on Claude) for real
+against a running Foundry endpoint: it produces correctly-typed, correctly-nested
+spans, but querying one back left model/usage/cost/input/output all unpopulated in
+default config. This project has a small, fixed number of LLM call sites, all already behind named
 wrapper functions -- explicit instrumentation is both necessary (for the data)
 and sufficient (no other call sites exist), so this skips the auto-instrumentor
 rather than running both and getting duplicate, emptier spans for the same call.
@@ -24,35 +24,35 @@ something fixable from this project's side. Check cloud.langfuse.com's UI
 directly once this is deployed somewhere with browser access.
 """
 
-import anthropic
 from langfuse import get_client
+from openai.types.responses import Response
 
-# Current Anthropic pricing, USD per token (see docs/architecture.md's cost
-# rubric for the source). Not derived from Langfuse's own model-price registry,
-# since claude-opus-5-5/claude-sonnet-5-5 served via Microsoft Foundry aren't
-# guaranteed to resolve against whatever provider/model names Langfuse has on
-# file for cost auto-calculation.
+# USD per token as (input, output). Not derived from Langfuse's own model-price
+# registry, since Foundry deployment names aren't guaranteed to resolve against
+# whatever model names Langfuse has on file. gpt-6.1-sol is deliberately absent
+# until its real price is filled in (cost_details stays None rather than guessing);
+# the Claude entries are kept so older traces/tests still price correctly.
 PRICING_PER_TOKEN: dict[str, tuple[float, float]] = {
     "claude-opus-5-5": (4.00 / 1_000_000, 20.00 / 1_000_000),
     "claude-sonnet-5-5": (2.00 / 1_000_000, 10.00 / 1_000_000),
 }
 
 
-def record_generation(response: anthropic.types.Message) -> None:
-    """Call right after a client.messages.create(...) inside a function
+def record_generation(response: Response) -> None:
+    """Call right after a client.responses.create(...) inside a function
     decorated with @observe(as_type="generation"), to attach the real
     model/usage/cost to that span."""
-    usage_details = {
-        "input": response.usage.input_tokens,
-        "output": response.usage.output_tokens,
-    }
+    usage = response.usage
+    input_tokens = usage.input_tokens if usage else 0
+    output_tokens = usage.output_tokens if usage else 0
+    usage_details = {"input": input_tokens, "output": output_tokens}
     cost_details = None
     pricing = PRICING_PER_TOKEN.get(response.model)
     if pricing is not None:
         input_price, output_price = pricing
         cost_details = {
-            "input": response.usage.input_tokens * input_price,
-            "output": response.usage.output_tokens * output_price,
+            "input": input_tokens * input_price,
+            "output": output_tokens * output_price,
         }
     get_client().update_current_generation(
         model=response.model,
