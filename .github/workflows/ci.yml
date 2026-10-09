@@ -90,9 +90,10 @@ jobs:
           # /mcp is a JSON-RPC/SSE endpoint, not a plain health check -- a bare
           # curl correctly gets a 400 "missing session ID" (confirmed against a
           # real running server, not assumed), which still proves the server is
-          # up and listening. "000" is curl's code for connection refused.
+          # up and listening. "000" is curl's code for connection refused
+          # (it also exits 7, which `bash -e` would treat as fatal -- hence `|| true`).
           for _ in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "http://${MCP_SERVER_HOST}:${MCP_SERVER_PORT}/mcp")
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://${MCP_SERVER_HOST}:${MCP_SERVER_PORT}/mcp") || true
             [ "$code" != "000" ] && break
             sleep 1
           done
