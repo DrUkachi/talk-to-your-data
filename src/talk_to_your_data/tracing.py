@@ -29,10 +29,12 @@ from openai.types.responses import Response
 
 # USD per token as (input, output). Not derived from Langfuse's own model-price
 # registry, since Foundry deployment names aren't guaranteed to resolve against
-# whatever model names Langfuse has on file. gpt-6.1-sol is deliberately absent
-# until its real price is filled in (cost_details stays None rather than guessing);
-# the Claude entries are kept so older traces/tests still price correctly.
+# whatever model names Langfuse has on file. gpt-6.1-sol is the Global, short-context
+# tier ($2 / $10 per 1M); Data Zone ($2.20 / $11) and long-context ($4 / $15) tiers,
+# and the cheaper cached-input rate, are not modeled -- cost is a slight over-estimate
+# for cached prompts. The Claude entries are kept so older traces/tests still price.
 PRICING_PER_TOKEN: dict[str, tuple[float, float]] = {
+    "gpt-6.1-sol": (2.00 / 1_000_000, 10.00 / 1_000_000),
     "claude-opus-5-5": (4.00 / 1_000_000, 20.00 / 1_000_000),
     "claude-sonnet-5-5": (2.00 / 1_000_000, 10.00 / 1_000_000),
 }

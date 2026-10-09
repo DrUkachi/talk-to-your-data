@@ -57,3 +57,9 @@ def test_record_generation_leaves_cost_none_for_an_unpriced_model(captured_calls
     assert call["model"] == "some-other-model"
     assert call["usage_details"] == {"input": 10, "output": 10}
     assert call["cost_details"] is None
+
+
+def test_record_generation_prices_gpt_6_1_sol(captured_calls):
+    tracing.record_generation(_response("gpt-6.1-sol", input_tokens=1000, output_tokens=500))
+
+    assert captured_calls[0]["cost_details"] == pytest.approx({"input": 0.002, "output": 0.005})
