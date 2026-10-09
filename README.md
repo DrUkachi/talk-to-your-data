@@ -8,9 +8,11 @@ evaluation suite that runs in CI.
 
 ## Results
 
-- **Eval (CI-gated):** a 40-question golden set (26 answerable with independently
-  computed expected values, 14 out-of-scope). Latest runs: execution accuracy 96-100%,
-  faithfulness 96-100%, refusal correctness 100%.
+- **Eval (CI-gated):** 57 cases -- 26 answerable questions with independently computed
+  expected values, 14 out-of-scope, 12 chart cases (right chart kind, none for a single
+  value, an explanation when a requested chart is impossible), and 5 thread follow-ups.
+  Latest runs: execution accuracy, faithfulness, chart correctness and follow-up accuracy
+  96-100%, refusal correctness 100%.
 - **Latency:** a typical question takes ~6-8s (4 sequential LLM calls), down from 16-48s
   after profiling -- see [docs/architecture.md](docs/architecture.md).
 - **Charts:** chosen in code from the shape of the result (time series -> line,
@@ -19,6 +21,7 @@ evaluation suite that runs in CI.
 
 Dataset: [Olist Brazilian e-commerce](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce).
 
+- License: [MIT](LICENSE).
 - Build plan, phases, and acceptance criteria: see [ROADMAP.md](ROADMAP.md).
 - Conventions and context for working on this repo (including with Claude Code): see
   [CLAUDE.md](CLAUDE.md).

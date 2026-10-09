@@ -4,8 +4,10 @@ suite reports a regression.
 """
 
 import re
+from pathlib import Path
 from typing import Any
 
+from talk_to_your_data.agents.eda.charting import classify_columns, to_float
 from talk_to_your_data.agents.eda.state import Finding
 
 _NUMBER_RE = re.compile(r"-?\d[\d,]*\.?\d*")
@@ -100,6 +102,9 @@ def score_faithfulness(finding: Finding, result_rows: list[dict[str, Any]]) -> t
     # thousands/millions shorthand ("549.4K", "13.2M").
     for v in row_values:
         derived.update({v * 100.0, v / 1_000.0, v / 1_000_000.0})
+    # "Everything except one category": the total minus one stored value.
+    for v in row_values:
+        derived.add(total - v)
     # Simple derivations across two stored values (an average from sum / count, a
     # "non-delivered" count from total - delivered, a combined total, a percentage).
     if len(row_values) <= 8:
@@ -126,3 +131,50 @@ def score_refusal_correctness(finding: Finding) -> tuple[bool, str]:
     if is_refusal:
         return True, "correctly refused"
     return False, f"should have refused but answered: {finding.result_summary!r}"
+
+
+def score_chart(finding: Finding, expected: str) -> tuple[bool, str]:
+    text = f"{finding.result_summary} {finding.interpretation} {finding.caveats}"
+    mentions_chart = bool(re.search(r"chart|plot|graph", text, re.I))
+    has_file = bool(finding.chart_ref) and Path(finding.chart_ref or "").exists()
+    if expected in ("line", "bar", "pie"):
+        if has_file and finding.chart_kind == expected:
+            return True, f"produced a {expected} chart"
+        return (
+            False,
+            f"expected a {expected} chart, got kind={finding.chart_kind!r} file={has_file}",
+        )
+    if expected == "none":
+        if finding.chart_ref is None:
+            return True, "correctly made no chart for a single value"
+        return False, f"made an unrequested {finding.chart_kind} chart for a single value"
+    if expected == "requested":
+        if has_file:
+            return True, f"produced a {finding.chart_kind} chart for the explicit request"
+        if mentions_chart:
+            return True, "no chart possible, and the answer says so"
+        return False, "chart requested, but no chart was made and nothing explained why"
+    raise ValueError(f"unknown expected chart outcome {expected!r}")
+
+
+def score_followup(
+    expected_value: float,
+    tolerance: float,
+    mode: str,
+    result_rows: list[dict[str, Any]],
+    finding: Finding,
+) -> tuple[bool, str]:
+    if mode == "value":
+        return score_execution_accuracy(expected_value, tolerance, result_rows, finding)
+    if mode == "rows_sum":
+        if not result_rows:
+            return False, "follow-up returned no rows to sum"
+        kinds = classify_columns(list(result_rows[0]), result_rows)
+        numeric = next((c for c, k in kinds.items() if k == "numeric"), None)
+        if numeric is None:
+            return False, f"no numeric column in follow-up rows {list(result_rows[0])}"
+        total = sum(to_float(r[numeric]) or 0.0 for r in result_rows)
+        if _within_tolerance(total, expected_value, tolerance):
+            return True, f"rows sum to {total}, expected {expected_value}"
+        return False, f"rows sum to {total}, expected {expected_value}"
+    raise ValueError(f"unknown follow-up scoring mode {mode!r}")

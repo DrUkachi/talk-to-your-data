@@ -15,10 +15,18 @@ import pytest
 
 from talk_to_your_data.agents.eda.ask import ask_question
 from talk_to_your_data.agents.eda.findings_store import get_latest_finding_for_thread
-from talk_to_your_data.eval.golden_set import ANSWERABLE_CASES, REFUSAL_CASES
+from talk_to_your_data.agents.eda.followup_agent import answer_followup
+from talk_to_your_data.eval.golden_set import (
+    ANSWERABLE_CASES,
+    CHART_CASES,
+    FOLLOWUP_CASES,
+    REFUSAL_CASES,
+)
 from talk_to_your_data.eval.scorers import (
+    score_chart,
     score_execution_accuracy,
     score_faithfulness,
+    score_followup,
     score_refusal_correctness,
 )
 
@@ -50,4 +58,24 @@ async def test_refusal_case(case):
     thread_id = f"eval-refusal-{uuid.uuid4()}"
     finding = await ask_question(case["question"], thread_id=thread_id)
     passed, detail = score_refusal_correctness(finding)
+    assert passed, detail
+
+
+@pytest.mark.parametrize("case", CHART_CASES, ids=[c["question"] for c in CHART_CASES])
+async def test_chart_case(case):
+    finding = await ask_question(case["question"], thread_id=f"eval-chart-{uuid.uuid4()}")
+    passed, detail = score_chart(finding, case["expected"])
+    assert passed, detail
+
+
+@pytest.mark.parametrize("case", FOLLOWUP_CASES, ids=[c["question"] for c in FOLLOWUP_CASES])
+async def test_followup_case(case):
+    thread_id = f"eval-followup-{uuid.uuid4()}"
+    await ask_question(case["parent_question"], thread_id=thread_id)
+    parent = get_latest_finding_for_thread(thread_id)
+    finding = await answer_followup(parent["id"], case["question"])
+    stored = get_latest_finding_for_thread(thread_id)
+    passed, detail = score_followup(
+        case["expected_value"], case["tolerance"], case["mode"], stored["result_rows"], finding
+    )
     assert passed, detail

@@ -115,3 +115,57 @@ def test_faithfulness_ignores_numbers_restated_from_the_question():
     )
     passed, _ = score_faithfulness(finding, [{"n": 12000}])
     assert passed is True
+
+
+# --- chart and follow-up scorers ------------------------------------------------
+
+
+def _chart_finding(tmp_path, kind, with_file=True, **overrides):
+    path = tmp_path / f"c-{kind}-{with_file}.png"
+    if with_file:
+        path.write_bytes(b"x")
+    return _finding(chart_ref=str(path) if kind else None, chart_kind=kind, **overrides)
+
+
+def test_score_chart_requires_the_expected_kind_and_a_real_file(tmp_path):
+    from talk_to_your_data.eval.scorers import score_chart
+
+    assert score_chart(_chart_finding(tmp_path, "line"), "line")[0] is True
+    assert score_chart(_chart_finding(tmp_path, "bar"), "line")[0] is False
+    assert score_chart(_chart_finding(tmp_path, "line", with_file=False), "line")[0] is False
+
+
+def test_score_chart_none_means_no_chart_for_a_single_value(tmp_path):
+    from talk_to_your_data.eval.scorers import score_chart
+
+    assert score_chart(_chart_finding(tmp_path, None), "none")[0] is True
+    assert score_chart(_chart_finding(tmp_path, "bar"), "none")[0] is False
+
+
+def test_score_chart_requested_needs_a_chart_or_an_explanation(tmp_path):
+    from talk_to_your_data.eval.scorers import score_chart
+
+    silent = _chart_finding(tmp_path, None, result_summary="625.", caveats="none known")
+    told = _chart_finding(tmp_path, None, caveats="No chart was made: single value.")
+    assert score_chart(silent, "requested")[0] is False  # the one real failure
+    assert score_chart(told, "requested")[0] is True
+    assert score_chart(_chart_finding(tmp_path, "line"), "requested")[0] is True
+
+
+def test_score_followup_value_and_rows_sum_modes():
+    from talk_to_your_data.eval.scorers import score_followup
+
+    finding = _finding(result_summary="The highest was 987,765.37.")
+    assert score_followup(987765.37, 0.005, "value", [], finding)[0] is True
+    rows = [{"period": "2017-01-01", "n": "10"}, {"period": "2017-02-01", "n": "15"}]
+    assert score_followup(25, 0.001, "rows_sum", rows, finding)[0] is True
+    assert score_followup(30, 0.001, "rows_sum", rows, finding)[0] is False
+    assert score_followup(25, 0.001, "rows_sum", [], finding)[0] is False
+
+
+def test_faithfulness_accepts_total_minus_one_category():
+    rows = [{"status": s, "n": n} for s, n in [("a", 96478), ("b", 625), ("c", 2000), ("d", 338)]]
+    finding = _finding(
+        result_summary="There are 2,963 orders outside status a.", interpretation="ok"
+    )
+    assert score_faithfulness(finding, rows)[0] is True

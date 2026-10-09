@@ -22,15 +22,22 @@ from typing import Any
 
 from talk_to_your_data.agents.eda.ask import ask_question
 from talk_to_your_data.agents.eda.findings_store import get_latest_finding_for_thread
+from talk_to_your_data.agents.eda.followup_agent import answer_followup
 from talk_to_your_data.eval.golden_set import (
     ANSWERABLE_CASES,
+    CHART_CASES,
+    FOLLOWUP_CASES,
     REFUSAL_CASES,
     AnswerableCase,
+    ChartCase,
+    FollowupCase,
     RefusalCase,
 )
 from talk_to_your_data.eval.scorers import (
+    score_chart,
     score_execution_accuracy,
     score_faithfulness,
+    score_followup,
     score_refusal_correctness,
 )
 
@@ -38,6 +45,10 @@ THRESHOLDS = {
     "execution_accuracy": 0.90,
     "faithfulness": 0.90,
     "refusal_correctness": 1.0,
+    # Chart choice/explanation and thread follow-ups are LLM-path-dependent (the
+    # model may shape its SQL differently run to run), so they get a margin.
+    "chart_correctness": 0.85,
+    "followup_accuracy": 0.80,
 }
 LATENCY_P50_THRESHOLD_SECONDS = 30.0
 LATENCY_PROBE_SIZE = 5
@@ -106,6 +117,44 @@ async def _run_refusal_case(case: RefusalCase) -> dict[str, Any]:
     }
 
 
+async def _run_chart_case(case: ChartCase) -> dict[str, Any]:
+    async with _semaphore:
+        try:
+            finding = await ask_question(case["question"], thread_id=f"eval-chart-{uuid.uuid4()}")
+        except Exception as e:  # noqa: BLE001 -- a hard failure counts against the score
+            return {
+                "question": case["question"],
+                "chart_pass": False,
+                "chart_detail": f"raised {type(e).__name__}: {e!r}",
+            }
+    passed, detail = score_chart(finding, case["expected"])
+    return {"question": case["question"], "chart_pass": passed, "chart_detail": detail}
+
+
+async def _run_followup_case(case: FollowupCase) -> dict[str, Any]:
+    label = f"{case['parent_question']} -> {case['question']}"
+    thread_id = f"eval-followup-{uuid.uuid4()}"
+    async with _semaphore:
+        try:
+            await ask_question(case["parent_question"], thread_id=thread_id)
+            parent = get_latest_finding_for_thread(thread_id)
+            if parent is None:
+                raise RuntimeError("parent finding was not stored")
+            finding = await answer_followup(parent["id"], case["question"])
+        except Exception as e:  # noqa: BLE001
+            return {
+                "question": label,
+                "followup_pass": False,
+                "followup_detail": f"raised {type(e).__name__}: {e!r}",
+            }
+    stored = get_latest_finding_for_thread(thread_id)
+    rows = stored["result_rows"] if stored else []
+    passed, detail = score_followup(
+        case["expected_value"], case["tolerance"], case["mode"], rows, finding
+    )
+    return {"question": label, "followup_pass": passed, "followup_detail": detail}
+
+
 async def _latency_probe() -> list[float]:
     """The 30s target is per-question for a single user. Latencies measured inside
     the 5-way-concurrent run above include queueing on shared LLM/DB capacity, so
@@ -124,9 +173,13 @@ async def _latency_probe() -> list[float]:
 async def run_all() -> dict[str, Any]:
     answerable = await asyncio.gather(*(_run_answerable_case(c) for c in ANSWERABLE_CASES))
     refusal = await asyncio.gather(*(_run_refusal_case(c) for c in REFUSAL_CASES))
+    chart = await asyncio.gather(*(_run_chart_case(c) for c in CHART_CASES))
+    followup = await asyncio.gather(*(_run_followup_case(c) for c in FOLLOWUP_CASES))
     return {
         "answerable": list(answerable),
         "refusal": list(refusal),
+        "chart": list(chart),
+        "followup": list(followup),
         "probe_latencies": await _latency_probe(),
     }
 
@@ -134,10 +187,14 @@ async def run_all() -> dict[str, Any]:
 def _report(results: dict[str, Any]) -> bool:
     answerable = results["answerable"]
     refusal = results["refusal"]
+    chart = results["chart"]
+    followup = results["followup"]
 
     acc_rate = sum(r["accuracy_pass"] for r in answerable) / len(answerable)
     faith_rate = sum(r["faithfulness_pass"] for r in answerable) / len(answerable)
     refusal_rate = sum(r["refusal_pass"] for r in refusal) / len(refusal)
+    chart_rate = sum(r["chart_pass"] for r in chart) / len(chart)
+    followup_rate = sum(r["followup_pass"] for r in followup) / len(followup)
     p50_latency = statistics.median(results["probe_latencies"])
 
     print(f"\n{'=' * 70}\nEVAL REPORT\n{'=' * 70}")
@@ -147,6 +204,14 @@ def _report(results: dict[str, Any]) -> bool:
     print(f"Execution accuracy:  {acc_rate:.1%} (threshold {acc_threshold:.0%})")
     print(f"Faithfulness:        {faith_rate:.1%} (threshold {faith_threshold:.0%})")
     print(f"Refusal correctness: {refusal_rate:.1%} (threshold {refusal_threshold:.0%})")
+    print(
+        f"Chart correctness:   {chart_rate:.1%} (threshold {THRESHOLDS['chart_correctness']:.0%})"
+        f" over {len(chart)} cases"
+    )
+    print(
+        f"Follow-up accuracy:  {followup_rate:.1%} "
+        f"(threshold {THRESHOLDS['followup_accuracy']:.0%}) over {len(followup)} cases"
+    )
     latency_threshold = LATENCY_P50_THRESHOLD_SECONDS
     print(
         f"p50 latency:         {p50_latency:.1f}s over {len(results['probe_latencies'])} "
@@ -166,6 +231,14 @@ def _report(results: dict[str, Any]) -> bool:
         if not r["refusal_pass"]:
             any_failures = True
             print(f"  [refusal]      {r['question']!r}: {r['refusal_detail']}")
+    for r in chart:
+        if not r["chart_pass"]:
+            any_failures = True
+            print(f"  [chart]        {r['question']!r}: {r['chart_detail']}")
+    for r in followup:
+        if not r["followup_pass"]:
+            any_failures = True
+            print(f"  [follow-up]    {r['question']!r}: {r['followup_detail']}")
     if not any_failures:
         print("  (none)")
 
@@ -173,6 +246,8 @@ def _report(results: dict[str, Any]) -> bool:
         acc_rate >= THRESHOLDS["execution_accuracy"]
         and faith_rate >= THRESHOLDS["faithfulness"]
         and refusal_rate >= THRESHOLDS["refusal_correctness"]
+        and chart_rate >= THRESHOLDS["chart_correctness"]
+        and followup_rate >= THRESHOLDS["followup_accuracy"]
         and p50_latency <= LATENCY_P50_THRESHOLD_SECONDS
     )
     print(f"\n{'PASS' if passed else 'FAIL'}")

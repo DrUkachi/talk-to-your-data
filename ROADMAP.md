@@ -725,6 +725,11 @@ refusal correctness 100%, p50 latency 19.2s over 5 serial questions.
 **Latency pass (after 6d):** p50 17-19s -> 6.1s with accuracy/faithfulness/refusal
 still 100% (see CLAUDE.md's "Latency design" bullet for what changed).
 
+**Eval extension (post-6d):** added 12 chart cases and 5 thread follow-up cases with
+reference-SQL expected values. It found two real bugs: stored result rows held every
+period while the answer said "2017" (so "total across those months" summed all of them),
+and the SQL agent occasionally replying without calling a tool (now nudged).
+
 **Deviations:** latency is measured on a serial probe (concurrent latency measures
 queueing, not the single-user target). Provider moved Claude -> GPT-6.1-Sol mid-phase
 (see `src/talk_to_your_data/llm.py`).

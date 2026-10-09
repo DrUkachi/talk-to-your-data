@@ -15,7 +15,7 @@ from langgraph.graph.state import CompiledStateGraph
 from talk_to_your_data.checkpointer import compiled_graph_async
 
 from .analysis_agent import analyze
-from .charting import build_chart
+from .charting import build_chart, restrict_to_window
 from .findings_store import save_finding
 from .narrative_agent import write_finding
 from .sql_agent import run_sql_agent
@@ -79,18 +79,26 @@ async def narrative_agent_node(state: AgentState) -> dict:
         if stats.get("first_period") and stats.get("last_period")
         else None
     )
+    # The semantic layer has no date filter, so sql_result holds every period. Narrow
+    # the stored result to the window the answer reports, so the narrative, the chart,
+    # the saved rows and any later follow-up ("total across those months") all agree.
+    narrowed = restrict_to_window(sql_result, window)
+    if window is not None and len(narrowed.rows) < len(sql_result.rows):
+        note = f"\n-- rows narrowed after the query to period {window[0][:10]}..{window[1][:10]}"
+        sql_result = narrowed.model_copy(update={"sql": sql_result.sql + note})
     chart = await asyncio.to_thread(
         build_chart,
         state["question"],
         sql_result,
         state["thread_id"],
-        window,
+        None,
         state.get("display_question"),
     )
     finding = await asyncio.to_thread(
         write_finding, state["question"], sql_result, analysis_result, chart_note=chart.note
     )
     finding.chart_ref = chart.path
+    finding.chart_kind = chart.kind
     if state.get("display_question"):
         finding.question = str(state["display_question"])
     await asyncio.to_thread(save_finding, state["thread_id"], finding, sql_result)

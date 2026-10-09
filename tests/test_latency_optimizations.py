@@ -175,3 +175,52 @@ def test_scorer_accepts_a_difference_and_a_ratio_of_stored_values():
         interpretation="ok",
     )
     assert score_faithfulness(finding, rows)[0] is True
+
+
+async def test_narrative_node_stores_only_the_rows_in_the_reported_window(monkeypatch):
+    """Regression: the stored rows held every period while the answer said "2017", so a
+    follow-up like "total across those months" summed all of them (13.2M, not 5.96M)."""
+    saved = {}
+    rows = [{"period": f"{y}-{m:02d}-01", "revenue": 1} for y in (2016, 2017) for m in (1, 6)]
+    sql_result = {"sql": "SELECT 1", "columns": ["period", "revenue"], "rows": rows}
+    analysis = {
+        "lens": "time_series_trend",
+        "stats": {"first_period": "2017-01-01", "last_period": "2017-12-31"},
+        "notes": "",
+    }
+    from talk_to_your_data.agents.eda.state import Finding
+
+    def fake_write(question, sql_result, analysis_result, **kwargs):
+        saved["narrative_rows"] = len(sql_result.rows)
+        return Finding(
+            question=question,
+            sql=sql_result.sql,
+            result_summary="s",
+            caveats="c",
+            confidence="high",
+            interpretation="i",
+        )
+
+    monkeypatch.setattr(supervisor, "write_finding", fake_write)
+    monkeypatch.setattr(
+        supervisor,
+        "save_finding",
+        lambda tid, f, sr, parent_finding_id=None: saved.update(rows=len(sr.rows), sql=sr.sql),
+    )
+    monkeypatch.setattr(supervisor, "build_chart", lambda *a, **k: charting_none())
+    await supervisor.narrative_agent_node(
+        {
+            "question": "revenue in 2017",
+            "thread_id": "t",
+            "sql_result": sql_result,
+            "analysis_result": analysis,
+        }
+    )
+    assert saved["narrative_rows"] == 2 and saved["rows"] == 2
+    assert "narrowed" in saved["sql"]
+
+
+def charting_none():
+    from talk_to_your_data.agents.eda.charting import ChartResult
+
+    return ChartResult(path=None)

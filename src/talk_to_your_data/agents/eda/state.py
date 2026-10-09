@@ -36,6 +36,7 @@ class Finding(BaseModel):
     sql: str
     result_summary: str
     chart_ref: str | None = None
+    chart_kind: str | None = None  # line/bar/pie/scatter; not persisted, used by the eval
     caveats: str
     confidence: Literal["low", "medium", "high"]
     interpretation: str

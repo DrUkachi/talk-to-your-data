@@ -254,6 +254,10 @@ especially trade-offs that affect answer quality or evaluability.
   Trend charts use the same period window as the analysis stats (the semantic layer has
   no date filter). Files go to `CHART_DIR` (default `data/charts/`, gitignored).
 
+- **Eval covers more than first-turn answers** (57 cases): chart kind / no-chart /
+  explanation, and thread follow-ups incl. the fresh-data fallback. A finding's stored
+  rows are narrowed to the period window its answer reports (`restrict_to_window`) so
+  follow-ups agree with what the user saw.
 - **Latency design (measured, Phase 6d+):** a question is ~4 sequential LLM calls
   (scope check overlapped with sql_agent turn 1, sql_agent turn 2, write_finding), ~6-8s,
   down from 16-48s. What made the difference, so don't undo it casually: supervisor

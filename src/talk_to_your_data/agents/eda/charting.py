@@ -206,7 +206,7 @@ def _render(kind: str, spec: dict[str, Any], result: SqlResult, title: str, out:
         plt.close(fig)
 
 
-def _restrict_to_window(result: SqlResult, window: tuple[str, str] | None) -> SqlResult:
+def restrict_to_window(result: SqlResult, window: tuple[str, str] | None) -> SqlResult:
     """The semantic layer has no date filter, so a "trend in 2017" query returns every
     period; analysis_agent narrows to the requested window for its stats. Chart the
     same window, or the picture would contradict the narrative."""
@@ -230,7 +230,7 @@ def build_chart(
     period_window: tuple[str, str] | None = None,
     title: str | None = None,
 ) -> ChartResult:
-    result = _restrict_to_window(result, period_window)
+    result = restrict_to_window(result, period_window)  # no-op when already restricted
     kind, detail = _plan(question, result)
     if kind is None:
         # Only an explicit request obliges us to explain the absence of a chart.

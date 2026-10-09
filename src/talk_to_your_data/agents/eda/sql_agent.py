@@ -26,6 +26,10 @@ from .mcp_tools import call_tool, list_openai_tools, mcp_server_url
 from .state import SqlResult
 
 MAX_TURNS = 6
+NUDGE = (
+    "You have not fetched any data yet. Call query_metric (or run_sql) now; "
+    "do not reply without a tool call."
+)
 
 _PROMPT_HEAD = (
     "You answer business questions about an e-commerce dataset using only the "
@@ -93,6 +97,11 @@ async def run_sql_agent(
 
             calls = tool_calls(response)
             if not calls:
+                if not results and turn < MAX_TURNS - 1:
+                    # Replied (e.g. "DONE") before fetching anything -- seen
+                    # intermittently under the terse "reply DONE" prompt. Nudge, don't fail.
+                    messages.append({"role": "user", "content": NUDGE})
+                    continue
                 break
 
             await await_scope_clearance()  # nothing touches data until scope passes

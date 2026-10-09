@@ -150,7 +150,8 @@ questions still never touch the data); and join keys are indexed. The eval suite
 re-checks answer quality after every such change.
 
 **Enforced in CI** (`eval/run_eval.py`, on pull requests): execution accuracy >= 90%,
-faithfulness >= 90%, refusal correctness = 100%, p50 latency <= 30s (measured serially
+faithfulness >= 90%, refusal correctness = 100%, chart correctness >= 85% (12 cases),
+thread follow-up accuracy >= 80% (5 cases), p50 latency <= 30s (measured serially
 on a 5-question probe, since the target is per-user, not under concurrent load). A
 per-question cost ceiling is not enforced -- costs here are far below the originally
 suggested $0.15, and prompt caching is not configured.
