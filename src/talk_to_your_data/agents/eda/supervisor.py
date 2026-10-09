@@ -29,6 +29,7 @@ from talk_to_your_data.llm import (
 from talk_to_your_data.tracing import record_generation
 
 from .analysis_agent import analyze
+from .charting import build_chart
 from .findings_store import save_finding
 from .narrative_agent import write_finding
 from .sql_agent import run_sql_agent
@@ -128,7 +129,19 @@ async def narrative_agent_node(state: AgentState) -> dict:
         if state.get("analysis_result")
         else None
     )
-    finding = await asyncio.to_thread(write_finding, state["question"], sql_result, analysis_result)
+    stats = analysis_result.stats if analysis_result else {}
+    window = (
+        (str(stats["first_period"]), str(stats["last_period"]))
+        if stats.get("first_period") and stats.get("last_period")
+        else None
+    )
+    chart = await asyncio.to_thread(
+        build_chart, state["question"], sql_result, state["thread_id"], window
+    )
+    finding = await asyncio.to_thread(
+        write_finding, state["question"], sql_result, analysis_result, chart_note=chart.note
+    )
+    finding.chart_ref = chart.path
     await asyncio.to_thread(save_finding, state["thread_id"], finding, sql_result)
     return {"finding": finding.model_dump(mode="json"), "status": "done"}
 

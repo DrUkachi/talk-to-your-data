@@ -245,6 +245,15 @@ especially trade-offs that affect answer quality or evaluability.
   `reasoning.effort=low` by default (`OPENAI_REASONING_EFFORT`) to meet the latency target.
   Azure's jailbreak filter 400s adversarial prompts; `check_scope` treats that as a refusal.
 
+- **Charts are chosen and rendered in code** (`agents/eda/charting.py`), from the
+  SHAPE of the result rows -- time + number -> line, category + number -> bar -- never
+  by the LLM, so a chart can't disagree with the stored data. Single-value results get
+  none. An explicit request ("plot", "pie chart", ...) can pick pie/bar and enables a
+  scatter fallback; if the user asked and none is possible, `ChartResult.note` is passed
+  to `write_finding`, which must explain why (and code appends it if the model doesn't).
+  Trend charts use the same period window as the analysis stats (the semantic layer has
+  no date filter). Files go to `CHART_DIR` (default `data/charts/`, gitignored).
+
 ## Data: Olist Brazilian e-commerce
 
 Loaded by `scripts/fetch_data.py` (Kaggle → `data/raw/`) and `scripts/load_data.py`
