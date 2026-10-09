@@ -24,12 +24,21 @@ FINDING_WITH_CHART = FINDING.model_copy(update={"chart_ref": "/tmp/chart.png"})
 
 class _FakeClient:
     def __init__(self, raise_on_upload: bool = False):
-        self.posted: list[dict] = []
+        self.posted: list[dict] = []  # real answers/errors only -- acks are tracked apart
+        self.acks: list[dict] = []
+        self.deleted: list[dict] = []
         self.uploaded: list[dict] = []
         self._raise_on_upload = raise_on_upload
 
     async def chat_postMessage(self, **kwargs):
+        if kwargs.get("text") == slackbot_app.ACK_TEXT:
+            self.acks.append(kwargs)
+            return {"ts": f"ack.{len(self.acks)}"}
         self.posted.append(kwargs)
+        return {"ts": "msg.1"}
+
+    async def chat_delete(self, **kwargs):
+        self.deleted.append(kwargs)
 
     async def files_upload_v2(self, **kwargs):
         if self._raise_on_upload:
@@ -234,3 +243,27 @@ async def test_chart_upload_failure_is_reported_but_does_not_raise(monkeypatch):
 
 async def _unexpected_call(*args, **kwargs):
     raise AssertionError("should not have been called")
+
+
+async def test_new_question_is_acknowledged_then_the_ack_is_removed(monkeypatch):
+    async def fake_ask_question(question, thread_id=None):
+        return FINDING
+
+    monkeypatch.setattr(slackbot_app, "ask_question", fake_ask_question)
+    client = _FakeClient()
+    await slackbot_app.handle_message(_event(channel_type="im"), _context(), client)
+
+    assert len(client.acks) == 1 and len(client.posted) == 1
+    assert client.deleted == [{"channel": "C1", "ts": "ack.1"}]
+
+
+async def test_ack_is_removed_even_when_the_question_fails(monkeypatch):
+    async def boom(question, thread_id=None):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(slackbot_app, "ask_question", boom)
+    client = _FakeClient()
+    await slackbot_app.handle_message(_event(channel_type="im"), _context(), client)
+
+    assert "Couldn't answer that" in client.posted[0]["text"]
+    assert len(client.deleted) == 1

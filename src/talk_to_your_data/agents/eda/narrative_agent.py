@@ -6,6 +6,7 @@ narrative to drift from what was actually asked or actually run.
 """
 
 import json
+import re
 from typing import Any
 
 from langfuse import observe
@@ -63,6 +64,7 @@ def write_finding(
     *,
     client: OpenAI | None = None,
     model: str | None = None,
+    chart_note: str | None = None,
 ) -> Finding:
     client = client or get_client()
     model = model or get_model()
@@ -70,13 +72,21 @@ def write_finding(
     prompt = (
         "Write up this data analysis as a finding. Every number in your "
         "interpretation must trace back to the result or analysis below -- if it "
-        "doesn't, it doesn't belong. You must call write_finding to respond.\n\n"
+        "doesn't, it doesn't belong. Be concise: result_summary and interpretation at "
+        "most two sentences each, caveats one sentence. You must call write_finding "
+        "to respond.\n\n"
         f"Question: {question}\n"
         f"Result columns: {sql_result.columns}\n"
         f"Result rows: {json.dumps(sql_result.rows, default=str)}\n"
         "Analysis: "
         f"{json.dumps(analysis_result.model_dump(mode='json') if analysis_result else None)}"
     )
+    if chart_note:
+        prompt += (
+            "\n\nThe user explicitly asked for a chart, but none could be produced: "
+            f"{chart_note} Tell the user this plainly in result_summary or caveats, "
+            "and say what kind of result would be plottable."
+        )
     response = client.responses.create(
         model=model,
         max_output_tokens=8192,
@@ -90,11 +100,17 @@ def write_finding(
         raise RuntimeError("narrative_agent: model did not call write_finding")
     fields: dict[str, Any] = dict(tool_use.arguments)
 
+    caveats = str(fields["caveats"])
+    summary = str(fields["result_summary"])
+    if chart_note and not re.search(r"chart|plot|graph", f"{summary} {caveats}", re.I):
+        # Guarantee the user is told, even if the model skipped the instruction.
+        caveats = f"{caveats} {chart_note}".strip()
+
     return Finding(
         question=question,
         sql=sql_result.sql,
-        result_summary=str(fields["result_summary"]),
-        caveats=str(fields["caveats"]),
+        result_summary=summary,
+        caveats=caveats,
         confidence=fields["confidence"],
         interpretation=str(fields["interpretation"]),
     )

@@ -115,6 +115,36 @@ def data_quality_checks(engine: Engine) -> None:
         logger.info("  products.product_category_name nulls: %d", null_category)
 
 
+# The raw tables have no keys/indexes (pandas to_sql), so every join on order_id was a
+# full scan -- a correlated NOT EXISTS over order_items ran for 10+ minutes. Idempotent.
+INDEXES = [
+    ("order_items", "order_id"),
+    ("order_items", "product_id"),
+    ("order_items", "seller_id"),
+    ("order_payments", "order_id"),
+    ("order_reviews", "order_id"),
+    ("orders", "customer_id"),
+    ("orders", "order_status"),
+    ("orders", "order_purchase_timestamp"),
+    ("customers", "customer_id"),
+    ("customers", "customer_unique_id"),
+    ("products", "product_id"),
+]
+
+
+def create_indexes(engine: Engine) -> None:
+    with engine.begin() as conn:
+        for table, column in INDEXES:
+            conn.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {SCHEMA}.{table} ({column})"
+                )
+            )
+        for table in sorted({t for t, _ in INDEXES}):
+            conn.execute(text(f"ANALYZE {SCHEMA}.{table}"))
+    logger.info("Created %d indexes and refreshed planner statistics.", len(INDEXES))
+
+
 def main() -> None:
     missing = [f for f in EXPECTED_FILES if not (RAW_DIR / f).exists()]
     if missing:
@@ -132,6 +162,8 @@ def main() -> None:
         n = load_csv(engine, RAW_DIR / filename)
         counts[table] = n
         logger.info("  %-30s %d rows loaded from %s", table, n, filename)
+
+    create_indexes(engine)
 
     logger.info("Verifying row counts in Postgres...")
     check_row_counts(engine, counts)

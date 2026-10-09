@@ -9,6 +9,7 @@ dependencies = [
     "langgraph>=0.2",
     "langgraph-checkpoint-postgres>=2.0",
     "openai>=2.0",
+    "matplotlib>=3.7.1",
     "psycopg[binary]>=3.2",
     "sqlalchemy>=2.0",
     "pandas>=2.2",

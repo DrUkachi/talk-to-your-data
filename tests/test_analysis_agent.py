@@ -70,3 +70,26 @@ def test_breakdown_stats_ranks_top_and_bottom():
 
 def test_breakdown_stats_handles_empty_rows():
     assert compute_breakdown_stats([]) == {"error": "no rows"}
+
+
+def test_trend_stats_handles_a_differently_named_time_column_and_string_numbers():
+    rows = [
+        {"order_month": "2017-01-01", "orders": "100"},
+        {"order_month": "2017-02-01", "orders": "150"},
+    ]
+    stats = compute_trend_stats(rows, None, None)
+    assert stats["first_period"] == "2017-01-01" and stats["pct_change"] == 50.0
+    assert stats["direction"] == "up"
+
+
+def test_trend_stats_reports_an_error_instead_of_raising_without_a_time_column():
+    stats = compute_trend_stats([{"status": "x", "n": 1}, {"status": "y", "n": 2}], None, None)
+    assert "error" in stats
+
+
+def test_breakdown_stats_handles_numeric_strings_and_missing_numeric_column():
+    rows = [{"category": "a", "avg_score": "4.5"}, {"category": "b", "avg_score": "3.0"}]
+    stats = compute_breakdown_stats(rows)
+    assert stats["metric_column"] == "avg_score"
+    assert stats["top"][0]["category"] == "a"
+    assert "error" in compute_breakdown_stats([{"category": "a", "label": "x"}])

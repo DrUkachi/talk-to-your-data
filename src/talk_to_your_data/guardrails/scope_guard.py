@@ -12,6 +12,8 @@ every other tool-use call site in this project, a malformed response raises
 rather than silently defaulting open or closed.
 """
 
+import asyncio
+from contextvars import ContextVar
 from typing import Any
 
 from langfuse import observe
@@ -26,6 +28,24 @@ from talk_to_your_data.llm import (
     to_openai_tool,
 )
 from talk_to_your_data.tracing import record_generation
+
+# ask_question runs the scope check concurrently with the supervisor graph (saves the
+# ~2s the check used to add before any work started). To keep the original guarantee --
+# an out-of-scope question never touches the data layer -- the graph's first data access
+# (sql_agent's MCP tool calls) waits on this gate, which ask_question resolves with the
+# scope verdict. No gate set (e.g. tests calling run_sql_agent directly) means no wait.
+scope_gate: ContextVar["asyncio.Future[bool] | None"] = ContextVar("scope_gate", default=None)
+
+
+class ScopeRefused(RuntimeError):
+    pass
+
+
+async def await_scope_clearance() -> None:
+    gate = scope_gate.get()
+    if gate is not None and not await asyncio.shield(gate):
+        raise ScopeRefused("question was judged out of scope")
+
 
 SCOPE_CHECK_TOOL: ToolSpec = {
     "name": "check_scope",

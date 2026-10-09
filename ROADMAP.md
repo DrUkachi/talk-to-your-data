@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 6 complete (6a-6d). Main LLM is GPT-6.1-Sol via Foundry's Responses API.**
+**Current status: Phase 6 complete (6a-6d), CI green. Main LLM is GPT-6.1-Sol via Foundry's Responses API.**
 
 ---
 
@@ -721,6 +721,9 @@ refusal correctness 100%, p50 latency 19.2s over 5 serial questions.
   concurrency; sync LLM calls blocked the event loop. Setup is once per process; LLM
   calls run via `asyncio.to_thread`.
 - MCP serializes Decimals as strings; the scorer now parses them.
+
+**Latency pass (after 6d):** p50 17-19s -> 6.1s with accuracy/faithfulness/refusal
+still 100% (see CLAUDE.md's "Latency design" bullet for what changed).
 
 **Deviations:** latency is measured on a serial probe (concurrent latency measures
 queueing, not the single-user target). Provider moved Claude -> GPT-6.1-Sol mid-phase

@@ -245,6 +245,28 @@ especially trade-offs that affect answer quality or evaluability.
   `reasoning.effort=low` by default (`OPENAI_REASONING_EFFORT`) to meet the latency target.
   Azure's jailbreak filter 400s adversarial prompts; `check_scope` treats that as a refusal.
 
+- **Charts are chosen and rendered in code** (`agents/eda/charting.py`), from the
+  SHAPE of the result rows -- time + number -> line, category + number -> bar -- never
+  by the LLM, so a chart can't disagree with the stored data. Single-value results get
+  none. An explicit request ("plot", "pie chart", ...) can pick pie/bar and enables a
+  scatter fallback; if the user asked and none is possible, `ChartResult.note` is passed
+  to `write_finding`, which must explain why (and code appends it if the model doesn't).
+  Trend charts use the same period window as the analysis stats (the semantic layer has
+  no date filter). Files go to `CHART_DIR` (default `data/charts/`, gitignored).
+
+- **Latency design (measured, Phase 6d+):** a question is ~4 sequential LLM calls
+  (scope check overlapped with sql_agent turn 1, sql_agent turn 2, write_finding), ~6-8s,
+  down from 16-48s. What made the difference, so don't undo it casually: supervisor
+  routing is deterministic code (`_route`, not an LLM); sql_agent's prompt embeds the
+  metric catalogue and says "no list/describe calls, parallel tool calls, reply DONE";
+  the lens comes from result shape and the date range from rules (LLM only for ranges
+  like "since June"); the scope check runs concurrently with the graph, gated by
+  `scope_guard.scope_gate` so no tool call touches data until scope passes; parallel
+  single-row results are merged (`merge_results`) so derived answers see every number;
+  `load_data.py` builds indexes on the join keys (a correlated NOT EXISTS used to run
+  10+ min). Profile with a wrapper around `Responses.create` -- LLM call COUNT, not
+  call speed, dominates (each call ~1.5s floor + ~75 output tokens/s).
+
 ## Data: Olist Brazilian e-commerce
 
 Loaded by `scripts/fetch_data.py` (Kaggle → `data/raw/`) and `scripts/load_data.py`
