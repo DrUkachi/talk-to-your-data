@@ -138,7 +138,7 @@ especially trade-offs that affect answer quality or evaluability.
   name, `ToolSpec` -> OpenAI tool conversion, tool-call parsing). Env:
   `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`OPENAI_MODEL` (default `gpt-6.1-sol`), shared
   with Codex CLI (`docs/codex.md`). The project moved from Claude to GPT-6.1-Sol.
-- **The `aie-academy-hub` Foundry deployment rejected forced `tool_choice`**
+- **The Foundry deployment rejected forced `tool_choice`**
   (`{"type": "tool", ...}` / `"any"`) with a 400 — confirmed against the earlier
   Claude deployments, NOT yet re-tested on GPT-6.1-Sol. GPT-6.1-Sol itself *requires* the Responses API
   for function tools (Chat Completions 400s unless reasoning_effort=none). Every tool-use call site

@@ -6,6 +6,17 @@ LangGraph multi-agent system that queries Postgres only through an MCP server ex
 a YAML-defined semantic layer. The system has guardrails, tracing (Langfuse), and an
 evaluation suite that runs in CI.
 
+## Results
+
+- **Eval (CI-gated):** a 40-question golden set (26 answerable with independently
+  computed expected values, 14 out-of-scope). Latest runs: execution accuracy 96-100%,
+  faithfulness 96-100%, refusal correctness 100%.
+- **Latency:** a typical question takes ~6-8s (4 sequential LLM calls), down from 16-48s
+  after profiling -- see [docs/architecture.md](docs/architecture.md).
+- **Charts:** chosen in code from the shape of the result (time series -> line,
+  category -> bar), or on request ("plot", "pie chart"); if a requested chart is
+  impossible for the data, the answer says why.
+
 Dataset: [Olist Brazilian e-commerce](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce).
 
 - Build plan, phases, and acceptance criteria: see [ROADMAP.md](ROADMAP.md).

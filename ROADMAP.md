@@ -232,7 +232,7 @@ hostname, not `localhost`).
   runtime image.
 
 **Post-completion fix (once real Foundry credentials were configured):** forced
-`tool_choice` (`{"type": "tool", ...}`) returns a 400 on the `aie-academy-hub`
+`tool_choice` (`{"type": "tool", ...}`) returns a 400 on the Foundry
 deployment for both `claude-opus-5-5` and `claude-sonnet-5` ("not supported for this
 model") — this had never been exercised against the real API before, since all
 Phase 3 tests used a stubbed client. Fixed in `llm.py`: dropped `tool_choice`
@@ -392,7 +392,7 @@ container, computing the correct combined total for the top-3-category follow-up
 **Key decisions, trade-offs, and bugs actually caught by running things:**
 - *No official `pandasai-anthropic` package* — `pandasai-litellm` plus LiteLLM's
   `anthropic/<model>` provider (which accepts a custom `api_base`) is the real path,
-  confirmed against `aie-academy-hub` before committing to the design.
+  confirmed against the Foundry deployment before committing to the design.
 - *Follow-ups reconstruct the DataFrame from stored rows, never re-query* — a
   follow-up re-running the original SQL could see different data than what the user
   actually looked at (the underlying tables can change between questions), which
