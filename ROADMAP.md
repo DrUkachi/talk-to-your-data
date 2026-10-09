@@ -6,7 +6,7 @@ Workflow for every phase: propose a plan → get explicit approval → implement
 tests → write the phase summary (what was built, key design decisions + trade-offs)
 → check off tasks below and note any deviations from plan.
 
-**Current status: Phase 6 complete (6a-6d). Main LLM is GPT-6.1-Sol via Foundry's Responses API.**
+**Current status: Phase 6 complete (6a-6d), CI green. Main LLM is GPT-6.1-Sol via Foundry's Responses API.**
 
 ---
 
