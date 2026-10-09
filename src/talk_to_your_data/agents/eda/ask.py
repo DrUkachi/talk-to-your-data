@@ -52,7 +52,9 @@ async def _cancel(task: asyncio.Task) -> None:
         await task
 
 
-async def ask_question(question: str, thread_id: str | None = None) -> Finding:
+async def ask_question(
+    question: str, thread_id: str | None = None, *, display_question: str | None = None
+) -> Finding:
     global _findings_table_ready
     if not _findings_table_ready:  # DDL once per process -- see checkpointer.py
         ensure_findings_table()
@@ -63,6 +65,7 @@ async def ask_question(question: str, thread_id: str | None = None) -> Finding:
     initial = {
         "thread_id": thread_id,
         "question": question,
+        "display_question": display_question,
         "sql_result": None,
         "analysis_result": None,
         "finding": None,

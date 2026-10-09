@@ -228,6 +228,7 @@ def build_chart(
     result: SqlResult,
     thread_id: str = "chart",
     period_window: tuple[str, str] | None = None,
+    title: str | None = None,
 ) -> ChartResult:
     result = _restrict_to_window(result, period_window)
     kind, detail = _plan(question, result)
@@ -239,7 +240,7 @@ def build_chart(
     safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", thread_id)[:60]
     out = _chart_dir() / f"{safe_id}-{uuid.uuid4().hex[:8]}.png"
     try:
-        _render(kind, detail, result, question, out)
+        _render(kind, detail, result, title or question, out)
     except Exception as e:  # noqa: BLE001 -- a rendering bug must not lose the text answer
         note = f"The chart could not be rendered ({type(e).__name__})."
         return ChartResult(path=None, note=note if wants_chart(question) else None)

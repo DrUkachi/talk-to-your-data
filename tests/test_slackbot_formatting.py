@@ -58,3 +58,9 @@ def test_long_sql_is_truncated():
     assert len(sql_block_text) < len(long_sql)
     assert "truncated" in sql_block_text
     assert len(sql_block_text) <= MAX_SQL_BLOCK_CHARS + 100
+
+
+def test_answer_comes_before_its_interpretation():
+    blocks = finding_to_blocks(_finding(interpretation="INTERP", result_summary="ANSWER"))
+    texts = [b["text"]["text"] for b in blocks if b["type"] == "section"][:2]
+    assert texts == ["ANSWER", "INTERP"]

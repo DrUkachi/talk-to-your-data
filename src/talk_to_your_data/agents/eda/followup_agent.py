@@ -198,7 +198,9 @@ async def answer_followup(finding_id: str, question: str) -> Finding:
             f'A previous question was: "{parent["question"]}". '
             f"As a follow-up, now answer: {question}"
         )
-        return await ask_question(contextual_question, thread_id=parent["thread_id"])
+        return await ask_question(
+            contextual_question, thread_id=parent["thread_id"], display_question=question
+        )
 
     finding = write_finding(question, sql_result, analysis_result=None)
     finding.chart_ref = chart_ref

@@ -44,6 +44,7 @@ class Finding(BaseModel):
 class AgentState(TypedDict, total=False):
     thread_id: str
     question: str
+    display_question: str | None  # what the user actually asked (chart title, stored finding)
     sql_result: dict[str, Any] | None
     analysis_result: dict[str, Any] | None
     finding: dict[str, Any] | None

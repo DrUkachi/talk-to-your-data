@@ -139,9 +139,10 @@ async def test_answer_followup_falls_back_to_ask_question_when_data_is_insuffici
 
     calls = {}
 
-    async def fake_ask_question(question, thread_id=None):
+    async def fake_ask_question(question, thread_id=None, *, display_question=None):
         calls["question"] = question
         calls["thread_id"] = thread_id
+        calls["display_question"] = display_question
         return FRESH_FINDING
 
     monkeypatch.setattr(followup_agent, "ask_question", fake_ask_question)
@@ -156,6 +157,8 @@ async def test_answer_followup_falls_back_to_ask_question_when_data_is_insuffici
     # carry the parent's original question so "that"/"it" can be resolved.
     assert "break down by category" in calls["question"]
     assert PARENT["question"] in calls["question"]
+    # ...but the user-facing label (chart title, stored finding) is their own words.
+    assert calls["display_question"] == "break down by category"
 
 
 async def test_answer_followup_uses_pandasai_result_when_data_is_sufficient(monkeypatch):

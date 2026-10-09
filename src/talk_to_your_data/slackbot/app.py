@@ -64,8 +64,8 @@ def finding_to_blocks(finding: Finding) -> list[dict[str, Any]]:
         sql = sql[:MAX_SQL_BLOCK_CHARS] + "\n-- truncated --"
 
     blocks: list[dict[str, Any]] = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": finding.interpretation}},
         {"type": "section", "text": {"type": "mrkdwn", "text": finding.result_summary}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": finding.interpretation}},
         {
             "type": "context",
             "elements": [

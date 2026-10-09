@@ -80,12 +80,19 @@ async def narrative_agent_node(state: AgentState) -> dict:
         else None
     )
     chart = await asyncio.to_thread(
-        build_chart, state["question"], sql_result, state["thread_id"], window
+        build_chart,
+        state["question"],
+        sql_result,
+        state["thread_id"],
+        window,
+        state.get("display_question"),
     )
     finding = await asyncio.to_thread(
         write_finding, state["question"], sql_result, analysis_result, chart_note=chart.note
     )
     finding.chart_ref = chart.path
+    if state.get("display_question"):
+        finding.question = str(state["display_question"])
     await asyncio.to_thread(save_finding, state["thread_id"], finding, sql_result)
     return {"finding": finding.model_dump(mode="json"), "status": "done"}
 
